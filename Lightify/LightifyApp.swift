@@ -20,5 +20,17 @@ struct LightifyApp: App {
                     playback.attach(appSession: appSession)
                 }
         }
+
+        Window("Mini Player", id: MiniPlayerWindowScene.id) {
+            MiniPlayerWindowView()
+                .environment(appSession)
+                .environment(playback)
+                .tint(Color("AccentColor"))
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 360, height: 520)
     }
 }

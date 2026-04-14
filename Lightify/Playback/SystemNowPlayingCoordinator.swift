@@ -121,11 +121,7 @@ final class SystemNowPlayingCoordinator {
 
     private nonisolated static func downloadArtwork(from url: URL) async -> NSImage? {
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
-                return nil
-            }
-            return NSImage(data: data)
+            return try await ArtworkPipeline.shared.image(for: url, maxPixelSize: 512)
         } catch {
             return nil
         }

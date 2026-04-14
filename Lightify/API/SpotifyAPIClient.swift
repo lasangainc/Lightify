@@ -107,6 +107,68 @@ struct SpotifyAPIClient: Sendable {
         try await get(endpointURL("tracks/\(id)"), accessToken: accessToken)
     }
 
+    /// `GET /v1/albums/{id}` — [Get Album](https://developer.spotify.com/documentation/web-api/reference/get-an-album).
+    func fetchAlbum(accessToken: String, albumID: String, market: String? = nil) async throws -> SpotifyAlbum {
+        var components = URLComponents(url: endpointURL("albums/\(albumID)"), resolvingAgainstBaseURL: false)!
+        var query: [URLQueryItem] = []
+        if let market, !market.isEmpty {
+            query.append(URLQueryItem(name: "market", value: market))
+        }
+        components.queryItems = query.isEmpty ? nil : query
+        guard let url = components.url else {
+            throw SpotifyAPIError.http(-1, "Invalid album URL")
+        }
+        return try await get(url, accessToken: accessToken)
+    }
+
+    /// `GET /v1/albums/{id}/tracks` — one page; follows `next` in `fetchAllAlbumTracks`.
+    func fetchAlbumTracksPage(
+        accessToken: String,
+        albumID: String,
+        limit: Int = 50,
+        offset: Int = 0,
+        market: String? = nil
+    ) async throws -> SpotifyAlbumTracksPage {
+        precondition((1 ... 50).contains(limit), "Spotify docs: limit must be 1...50")
+        var components = URLComponents(url: endpointURL("albums/\(albumID)/tracks"), resolvingAgainstBaseURL: false)!
+        var query: [URLQueryItem] = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ]
+        if let market, !market.isEmpty {
+            query.append(URLQueryItem(name: "market", value: market))
+        }
+        components.queryItems = query
+        return try await get(components.url!, accessToken: accessToken)
+    }
+
+    /// Fetches all tracks on an album by following each page’s `next` URL.
+    func fetchAllAlbumTracks(accessToken: String, albumID: String, market: String? = nil) async throws -> [SpotifyTrack] {
+        var all: [SpotifyTrack] = []
+        var url: URL? = {
+            var c = URLComponents(url: endpointURL("albums/\(albumID)/tracks"), resolvingAgainstBaseURL: false)!
+            var query: [URLQueryItem] = [
+                URLQueryItem(name: "limit", value: "50"),
+                URLQueryItem(name: "offset", value: "0"),
+            ]
+            if let market, !market.isEmpty {
+                query.append(URLQueryItem(name: "market", value: market))
+            }
+            c.queryItems = query
+            return c.url
+        }()
+        while let current = url {
+            let page: SpotifyAlbumTracksPage = try await get(current, accessToken: accessToken)
+            all.append(contentsOf: page.items)
+            if let next = page.next, let nextURL = URL(string: next) {
+                url = nextURL
+            } else {
+                url = nil
+            }
+        }
+        return all
+    }
+
     /// `GET /v1/me/tracks` — [Get User's Saved Tracks](https://developer.spotify.com/documentation/web-api/reference/get-users-saved-tracks). Requires `user-library-read`.
     func fetchSavedTracksPage(accessToken: String, limit: Int = 50, offset: Int = 0) async throws -> SpotifySavedTracksPage {
         precondition((1 ... 50).contains(limit), "Spotify docs: limit must be 1...50")
@@ -116,6 +178,48 @@ struct SpotifyAPIClient: Sendable {
             URLQueryItem(name: "offset", value: String(offset)),
         ]
         return try await get(components.url!, accessToken: accessToken)
+    }
+
+    /// Fetches the full saved-track id set using a trimmed response shape so heart state stays accurate without holding every full track payload in memory.
+    func fetchAllSavedTrackIDs(accessToken: String) async throws -> [String] {
+        struct SavedTrackIDsPage: Decodable {
+            struct Item: Decodable {
+                struct TrackRef: Decodable {
+                    let id: String?
+                }
+
+                let track: TrackRef?
+            }
+
+            let items: [Item]
+            let next: String?
+        }
+
+        var ids: [String] = []
+        var url: URL? = {
+            var c = URLComponents(url: endpointURL("me/tracks"), resolvingAgainstBaseURL: false)!
+            c.queryItems = [
+                URLQueryItem(name: "limit", value: "50"),
+                URLQueryItem(name: "offset", value: "0"),
+                URLQueryItem(name: "fields", value: "items(track(id)),next"),
+            ]
+            return c.url
+        }()
+
+        while let current = url {
+            let page: SavedTrackIDsPage = try await get(current, accessToken: accessToken)
+            for item in page.items {
+                if let id = item.track?.id, !id.isEmpty {
+                    ids.append(id)
+                }
+            }
+            if let next = page.next, let nextURL = URL(string: next) {
+                url = nextURL
+            } else {
+                url = nil
+            }
+        }
+        return ids
     }
 
     /// `GET /v1/me/player/recently-played` — requires `user-read-recently-played`.

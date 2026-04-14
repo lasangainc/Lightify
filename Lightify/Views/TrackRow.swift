@@ -86,30 +86,46 @@ struct TrackRow: View {
     var onPlay: () -> Void
     var playDisabled: Bool = false
     var onArtistTap: (() -> Void)? = nil
+    /// When set, tapping the artwork opens the album instead of playing (title/play button still play).
+    var onAlbumArtTap: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
-            Button(action: onPlay) {
+            Button {
+                if let onAlbumArtTap {
+                    onAlbumArtTap()
+                } else {
+                    onPlay()
+                }
+            } label: {
                 trackThumbnail
             }
             .buttonStyle(.plain)
-            .disabled(playDisabled)
-            .opacity(playDisabled ? 0.45 : 1)
+            .disabled(onAlbumArtTap == nil && playDisabled)
+            .opacity((onAlbumArtTap == nil && playDisabled) ? 0.45 : 1)
 
             VStack(alignment: .leading, spacing: 2) {
-                Button(action: onPlay) {
-                    Text(track.name)
-                        .font(.body.weight(.medium))
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .disabled(playDisabled)
-                .opacity(playDisabled ? 0.45 : 1)
+                Text(track.name)
+                    .font(.body.weight(.medium))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
 
                 artistLine
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                Button(action: onPlay) {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .buttonStyle(.plain)
+                .disabled(playDisabled)
+                .accessibilityLabel("Play \(track.name) by \(track.primaryArtistName)")
+            }
+            .opacity(playDisabled ? 0.45 : 1)
 
             TrackHeartButton(track: track)
 
@@ -139,31 +155,20 @@ struct TrackRow: View {
             Text(track.primaryArtistName)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
     }
 
     @ViewBuilder
     private var trackThumbnail: some View {
-        if let url = track.smallImageURL {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .empty:
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(.quaternary)
-                        .frame(width: 48, height: 48)
-                case let .success(image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 48, height: 48)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                case .failure:
-                    albumPlaceholder
-                @unknown default:
-                    albumPlaceholder
-                }
-            }
-        } else {
+        RemoteArtworkImage(url: track.smallImageURL, maxPixelSize: 96) { image in
+            image
+                .resizable()
+                .scaledToFill()
+                .frame(width: 48, height: 48)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        } placeholder: {
             albumPlaceholder
         }
     }

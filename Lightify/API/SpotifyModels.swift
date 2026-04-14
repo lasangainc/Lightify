@@ -33,18 +33,96 @@ struct SpotifyArtist: Decodable, Sendable {
     }
 }
 
+/// Simplified or full album object from track payloads, search, or `GET /v1/albums/{id}`.
+/// [SimplifiedAlbumObject](https://developer.spotify.com/documentation/web-api/reference/#object-simplifiedalbumobject)
 struct SpotifyAlbum: Decodable, Sendable {
+    let id: String?
+    let uri: String?
     let name: String
     let images: [SpotifyImage]?
+    let artists: [SpotifyArtist]?
+    let release_date: String?
+    let total_tracks: Int?
+
+    init(
+        id: String? = nil,
+        uri: String? = nil,
+        name: String,
+        images: [SpotifyImage]?,
+        artists: [SpotifyArtist]? = nil,
+        release_date: String? = nil,
+        total_tracks: Int? = nil
+    ) {
+        self.id = id
+        self.uri = uri
+        self.name = name
+        self.images = images
+        self.artists = artists
+        self.release_date = release_date
+        self.total_tracks = total_tracks
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id)
+        uri = try c.decodeIfPresent(String.self, forKey: .uri)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
         images = try c.decodeIfPresent([SpotifyImage].self, forKey: .images)
+        artists = try c.decodeIfPresent([SpotifyArtist].self, forKey: .artists)
+        release_date = try c.decodeIfPresent(String.self, forKey: .release_date)
+        total_tracks = try c.decodeIfPresent(Int.self, forKey: .total_tracks)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, images
+        case id, uri, name, images, artists, release_date, total_tracks
+    }
+
+    /// Primary line for album hero subtitle (album artists).
+    var primaryArtistLine: String {
+        artists?.map(\.name).filter { !$0.isEmpty }.joined(separator: ", ") ?? ""
+    }
+
+    var largestCoverURL: URL? {
+        images?
+            .compactMap { img -> (SpotifyImage, URL)? in
+                guard let u = img.url else { return nil }
+                return (img, u)
+            }
+            .max(by: { ($0.0.width ?? 0) < ($1.0.width ?? 0) })?
+            .1
+    }
+
+    /// Best-effort display year from `release_date` (YYYY, YYYY-MM, or YYYY-MM-DD).
+    var releaseYearString: String? {
+        guard let raw = release_date?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return String(raw.prefix(4))
+    }
+}
+
+extension SpotifyAlbum {
+    /// Seeds album detail UI from a catalog search hit before `GET /albums/{id}` completes.
+    init(fromSearchItem item: SpotifySearchAlbumItem) {
+        let mappedArtists: [SpotifyArtist]? = item.artists?.map { ref in
+            SpotifyArtist(id: ref.id, name: ref.name ?? "")
+        }
+        self.init(
+            id: item.id,
+            uri: item.id.isEmpty ? nil : "spotify:album:\(item.id)",
+            name: item.name,
+            images: item.images,
+            artists: mappedArtists,
+            release_date: nil,
+            total_tracks: nil
+        )
+    }
+}
+
+extension SpotifyArtist {
+    init(id: String?, name: String) {
+        self.id = id
+        self.name = name
     }
 }
 
@@ -64,6 +142,11 @@ struct SpotifyTrack: Decodable, Sendable, Identifiable {
     var primaryArtistId: String? {
         guard artists.count == 1 else { return nil }
         return artists.first?.id
+    }
+
+    /// Spotify album id when present on the nested `album` object (from track / playlist items).
+    var albumId: String? {
+        album?.id
     }
 
     var smallImageURL: URL? {
@@ -97,6 +180,33 @@ struct SpotifyTrack: Decodable, Sendable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, artists, album, duration_ms
+    }
+}
+
+extension SpotifyTrack {
+    init(
+        id: String,
+        name: String,
+        artists: [SpotifyArtist],
+        album: SpotifyAlbum?,
+        duration_ms: Int?
+    ) {
+        self.id = id
+        self.name = name
+        self.artists = artists
+        self.album = album
+        self.duration_ms = duration_ms
+    }
+
+    /// Album-track payloads omit nested album art, so detail screens can reattach the parent album.
+    func replacingAlbum(_ album: SpotifyAlbum?) -> SpotifyTrack {
+        SpotifyTrack(
+            id: id,
+            name: name,
+            artists: artists,
+            album: album ?? self.album,
+            duration_ms: duration_ms
+        )
     }
 }
 
@@ -506,7 +616,10 @@ struct SpotifySavedTracksPage: Decodable, Sendable {
     }
 
     let items: [Item]
+    let limit: Int?
+    let offset: Int?
     let next: String?
+    let total: Int?
 }
 
 /// `GET /v1/playlists/{id}/items` — [Get Playlist Items](https://developer.spotify.com/documentation/web-api/reference/get-playlists-items).
@@ -563,6 +676,23 @@ struct SpotifyPlaylistTracksPage: Decodable, Sendable {
 
     let items: [Item]
     let next: String?
+}
+
+/// `GET /v1/albums/{id}/tracks` — [Get an Album's Tracks](https://developer.spotify.com/documentation/web-api/reference/get-an-albums-tracks).
+struct SpotifyAlbumTracksPage: Decodable, Sendable {
+    let items: [SpotifyTrack]
+    let next: String?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = try c.decodeIfPresent([SpotifyTrack?].self, forKey: .items) ?? []
+        items = raw.compactMap { $0 }.filter { !$0.id.isEmpty }
+        next = try c.decodeIfPresent(String.self, forKey: .next)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items, next
+    }
 }
 
 struct SpotifyAPIErrorBody: Codable, Sendable {

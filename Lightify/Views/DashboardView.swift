@@ -88,6 +88,8 @@ struct DashboardView: View {
                                 searchSection
                             case .playlist:
                                 selectedLibraryTracksSection
+                            case .album:
+                                albumLibraryTracksSection
                             case .artist:
                                 EmptyView()
                             }
@@ -105,6 +107,16 @@ struct DashboardView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                if appSession.canGoBackFromAlbum {
+                    Button {
+                        Task { await appSession.goBackFromAlbum() }
+                    } label: {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    .help("Go back")
+                }
+            }
             ToolbarItem(placement: .automatic) {
                 Button {
                     Task { await appSession.selectLibrary(.search) }
@@ -257,10 +269,21 @@ struct DashboardView: View {
         Task { await appSession.openPlaylist(playlist) }
     }
 
+    private func openAlbumFromSearch(_ album: SpotifySearchAlbumItem) {
+        Task { await appSession.openAlbumFromSearch(album) }
+    }
+
     private func artistTapAction(for track: SpotifyTrack) -> (() -> Void)? {
         guard let aid = track.primaryArtistId else { return nil }
         let hint = track.artists.first?.name
         return { openArtist(id: aid, nameHint: hint) }
+    }
+
+    private func albumTapAction(for track: SpotifyTrack) -> (() -> Void)? {
+        guard !track.id.isEmpty else { return nil }
+        return {
+            Task { await appSession.openAlbum(from: track) }
+        }
     }
 
     private var likedSongsCarousel: some View {
@@ -276,9 +299,15 @@ struct DashboardView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 14) {
                         ForEach(appSession.likedSongs) { track in
-                            LikedSongCarouselCard(track: track, onPlay: {
-                                playback.playTrack(id: track.id)
-                            })
+                            LikedSongCarouselCard(
+                                track: track,
+                                onPlay: {
+                                    playback.playTrack(id: track.id)
+                                },
+                                onAlbumArtTap: {
+                                    Task { await appSession.openAlbum(from: track) }
+                                }
+                            )
                         }
                     }
                     .padding(.vertical, 4)
@@ -415,7 +444,8 @@ struct DashboardView: View {
                         track: track,
                         onPlay: { playback.playTrack(id: track.id) },
                         playDisabled: !playback.isWebPlayerReady,
-                        onArtistTap: artistTapAction(for: track)
+                        onArtistTap: artistTapAction(for: track),
+                        onAlbumArtTap: albumTapAction(for: track)
                     )
                 }
             }
@@ -428,14 +458,7 @@ struct DashboardView: View {
 
             if !snapshot.albums.isEmpty {
                 searchSubsection(title: "Albums", items: Array(snapshot.albums.prefix(3))) { album in
-                    Button {
-                        playback.playContextURI("spotify:album:\(album.id)")
-                    } label: {
-                        SearchAlbumRow(album: album)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!playback.isWebPlayerReady)
-                    .opacity(playback.isWebPlayerReady ? 1 : 0.45)
+                    searchAlbumRowWithOpen(album: album)
                 }
             }
 
@@ -521,20 +544,33 @@ struct DashboardView: View {
                 .padding(10)
             }
         case let .album(album):
-            Button {
-                playback.playContextURI("spotify:album:\(album.id)")
-            } label: {
-                SearchTopResultCardLayout(
-                    title: album.name,
-                    subtitle: album.primaryArtistName,
-                    imageURL: album.coverURL,
-                    footnote: "Album",
-                    systemImage: "square.stack.fill"
-                )
+            ZStack(alignment: .topTrailing) {
+                Button {
+                    openAlbumFromSearch(album)
+                } label: {
+                    SearchTopResultCardLayout(
+                        title: album.name,
+                        subtitle: album.primaryArtistName,
+                        imageURL: album.coverURL,
+                        footnote: "Album",
+                        systemImage: "square.stack.fill"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    playback.playContextURI("spotify:album:\(album.id)")
+                } label: {
+                    Image(systemName: "play.circle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+                .disabled(!playback.isWebPlayerReady)
+                .opacity(playback.isWebPlayerReady ? 1 : 0.45)
+                .padding(10)
             }
-            .buttonStyle(.plain)
-            .disabled(!playback.isWebPlayerReady)
-            .opacity(playback.isWebPlayerReady ? 1 : 0.45)
         case let .playlist(pl):
             Button {
                 openPlaylistFromSearch(pl)
@@ -558,7 +594,8 @@ struct DashboardView: View {
                     track: track,
                     onPlay: { playback.playTrack(id: track.id) },
                     playDisabled: !playback.isWebPlayerReady,
-                    onArtistTap: artistTapAction(for: track)
+                    onArtistTap: artistTapAction(for: track),
+                    onAlbumArtTap: albumTapAction(for: track)
                 )
                 Divider()
             }
@@ -599,16 +636,31 @@ struct DashboardView: View {
     private func searchAlbumsList(albums: [SpotifySearchAlbumItem]) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(albums) { album in
-                Button {
-                    playback.playContextURI("spotify:album:\(album.id)")
-                } label: {
-                    SearchAlbumRow(album: album)
-                }
-                .buttonStyle(.plain)
-                .disabled(!playback.isWebPlayerReady)
-                .opacity(playback.isWebPlayerReady ? 1 : 0.45)
+                searchAlbumRowWithOpen(album: album)
                 Divider()
             }
+        }
+    }
+
+    private func searchAlbumRowWithOpen(album: SpotifySearchAlbumItem) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                openAlbumFromSearch(album)
+            } label: {
+                SearchAlbumRow(album: album, showsTrailingPlayGlyph: false)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                playback.playContextURI("spotify:album:\(album.id)")
+            } label: {
+                Image(systemName: "play.circle")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(!playback.isWebPlayerReady)
+            .opacity(playback.isWebPlayerReady ? 1 : 0.45)
         }
     }
 
@@ -641,7 +693,8 @@ struct DashboardView: View {
                         TrackRow(
                             track: row.track,
                             onPlay: { playback.playTrack(id: row.track.id) },
-                            onArtistTap: artistTapAction(for: row.track)
+                            onArtistTap: artistTapAction(for: row.track),
+                            onAlbumArtTap: albumTapAction(for: row.track)
                         )
                         Divider()
                     }
@@ -667,9 +720,23 @@ struct DashboardView: View {
                         TrackRow(
                             track: track,
                             onPlay: { playback.playTrack(id: track.id) },
-                            onArtistTap: artistTapAction(for: track)
+                            onArtistTap: artistTapAction(for: track),
+                            onAlbumArtTap: albumTapAction(for: track)
                         )
+                        .task(id: track.id) {
+                            await appSession.loadMoreLikedSongsIfNeeded(currentTrackID: track.id)
+                        }
                         Divider()
+                    }
+
+                    if appSession.isLoadingMoreLikedSongs {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .controlSize(.small)
+                            Spacer()
+                        }
+                        .padding(.vertical, 12)
                     }
                 }
             }
@@ -679,6 +746,16 @@ struct DashboardView: View {
     private var selectedPlaylist: SpotifyPlaylistItem? {
         guard case .playlist(let id) = appSession.selectedLibrary else { return nil }
         return appSession.resolvedPlaylist(id: id)
+    }
+
+    private var selectedAlbumSelection: (id: String, nameHint: String?)? {
+        guard case .album(let id, let hint) = appSession.selectedLibrary else { return nil }
+        return (id, hint)
+    }
+
+    private var selectedResolvedAlbum: SpotifyAlbum? {
+        guard let sel = selectedAlbumSelection else { return nil }
+        return appSession.resolvedAlbum(id: sel.id)
     }
 
     /// Rename/delete only apply to playlists present in the user’s library.
@@ -710,6 +787,9 @@ struct DashboardView: View {
             return "Liked Songs"
         case .playlist:
             return selectedPlaylist?.name ?? "Playlist"
+        case .album:
+            guard let sel = selectedAlbumSelection else { return "Album" }
+            return selectedResolvedAlbum?.name ?? sel.nameHint ?? "Album"
         default:
             return ""
         }
@@ -718,9 +798,15 @@ struct DashboardView: View {
     /// Song count from loaded tracks, or playlist total from API metadata while tracks are still loading.
     private var libraryTrackCount: Int {
         let loaded = appSession.tracksForSelectedLibrary
+        if case .likedSongs = appSession.selectedLibrary {
+            return max(appSession.likedSongsTotalCount, loaded.count)
+        }
         if !loaded.isEmpty { return loaded.count }
         if case .playlist = appSession.selectedLibrary {
             return selectedPlaylist?.tracks?.total ?? 0
+        }
+        if case .album = appSession.selectedLibrary {
+            return selectedResolvedAlbum?.total_tracks ?? 0
         }
         return 0
     }
@@ -731,6 +817,8 @@ struct DashboardView: View {
             return appSession.isLoadingPlaylistTracks
         case .likedSongs:
             return appSession.phase == .loadingContent
+        case .album:
+            return appSession.isLoadingAlbumTracks
         default:
             return false
         }
@@ -749,7 +837,9 @@ struct DashboardView: View {
             parts.append(n == 1 ? "1 song" : "\(n) songs")
         }
         let totalMs = loaded.compactMap(\.duration_ms).reduce(0, +)
-        if totalMs > 0 {
+        let isFullyLoadedLikedSongs =
+            appSession.selectedLibrary != .likedSongs || loaded.count >= max(appSession.likedSongsTotalCount, 0)
+        if totalMs > 0, isFullyLoadedLikedSongs {
             parts.append(Self.formatPlaylistDuration(minutesRounded: (totalMs + 30_000) / 60_000))
         }
         return parts.joined(separator: " · ")
@@ -759,6 +849,18 @@ struct DashboardView: View {
         switch appSession.selectedLibrary {
         case .likedSongs:
             return "Your saved tracks"
+        case .album:
+            guard let album = selectedResolvedAlbum else { return nil }
+            var parts: [String] = []
+            let artists = album.primaryArtistLine
+            if !artists.isEmpty {
+                parts.append(artists)
+            }
+            if let y = album.releaseYearString {
+                parts.append(y)
+            }
+            parts.append("Album")
+            return parts.joined(separator: " · ")
         case .playlist:
             guard let raw = selectedPlaylist?.description?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
                 return nil
@@ -810,7 +912,7 @@ struct DashboardView: View {
     private var libraryActionButtons: some View {
         VStack(alignment: .leading, spacing: 10) {
             libraryPlayPillButton
-            if selectedPlaylist != nil, selectedPlaylistIsInUserLibrary {
+            if case .playlist = appSession.selectedLibrary, selectedPlaylist != nil, selectedPlaylistIsInUserLibrary {
                 playlistOptionsButton
             }
         }
@@ -822,17 +924,27 @@ struct DashboardView: View {
         return np.contextURI == "spotify:playlist:\(id)"
     }
 
+    private var selectedAlbumIsActiveAndPlaying: Bool {
+        guard case .album(let id, _) = appSession.selectedLibrary else { return false }
+        guard let np = playback.nowPlaying, np.isPlaying else { return false }
+        return np.contextURI == "spotify:album:\(id)"
+    }
+
+    private var libraryContextIsActiveAndPlaying: Bool {
+        selectedPlaylistIsActiveAndPlaying || selectedAlbumIsActiveAndPlaying
+    }
+
     private var libraryPlayPillButton: some View {
         Button {
-            if selectedPlaylistIsActiveAndPlaying {
+            if libraryContextIsActiveAndPlaying {
                 playback.playPause()
             } else {
                 playLibrarySelection()
             }
         } label: {
             Label(
-                selectedPlaylistIsActiveAndPlaying ? "Pause" : "Play",
-                systemImage: selectedPlaylistIsActiveAndPlaying ? "pause.fill" : "play.fill"
+                libraryContextIsActiveAndPlaying ? "Pause" : "Play",
+                systemImage: libraryContextIsActiveAndPlaying ? "pause.fill" : "play.fill"
             )
                 .font(.subheadline.weight(.semibold))
                 .labelStyle(.titleAndIcon)
@@ -879,6 +991,8 @@ struct DashboardView: View {
             return !appSession.likedSongs.isEmpty && appSession.phase != .loadingContent
         case .playlist:
             return true
+        case .album:
+            return true
         default:
             return false
         }
@@ -887,9 +1001,11 @@ struct DashboardView: View {
     private func playLibrarySelection() {
         switch appSession.selectedLibrary {
         case .likedSongs:
-            playback.playTrackList(trackIDs: appSession.likedSongs.map(\.id))
+            playback.playTrackList(trackIDs: appSession.likedSongIDsInOrder)
         case .playlist(let id):
             playback.playContextURI("spotify:playlist:\(id)")
+        case .album(let id, _):
+            playback.playContextURI("spotify:album:\(id)")
         default:
             break
         }
@@ -925,7 +1041,39 @@ struct DashboardView: View {
                         TrackRow(
                             track: track,
                             onPlay: { playback.playTrack(id: track.id) },
-                            onArtistTap: artistTapAction(for: track)
+                            onArtistTap: artistTapAction(for: track),
+                            onAlbumArtTap: albumTapAction(for: track)
+                        )
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
+
+    private var albumLibraryTracksSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            libraryHeroHeader
+
+            if let warning = appSession.albumCatalogWarning {
+                Text(warning)
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if appSession.tracksForSelectedLibrary.isEmpty, !appSession.isLoadingAlbumTracks, appSession.loadError == nil {
+                Text("No tracks on this album.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else if !appSession.tracksForSelectedLibrary.isEmpty {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(appSession.tracksForSelectedLibrary) { track in
+                        TrackRow(
+                            track: track,
+                            onPlay: { playback.playTrack(id: track.id) },
+                            onArtistTap: artistTapAction(for: track),
+                            onAlbumArtTap: albumTapAction(for: track)
                         )
                         Divider()
                     }
@@ -940,6 +1088,8 @@ struct DashboardView: View {
             return appSession.likedSongs.first?.largestAlbumImageURL
         case .playlist:
             return selectedPlaylist?.coverURL
+        case .album:
+            return selectedResolvedAlbum?.largestCoverURL
         default:
             return nil
         }
@@ -948,29 +1098,15 @@ struct DashboardView: View {
     private var libraryCoverHero: some View {
         let side: CGFloat = 140
         return Group {
-            if let url = libraryCoverImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(.quaternary)
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        libraryCoverPlaceholder
-                    @unknown default:
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(.quaternary)
-                    }
-                }
-                .frame(width: side, height: side)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
+            RemoteArtworkImage(url: libraryCoverImageURL, maxPixelSize: side * 2) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
                 libraryCoverPlaceholder
-                    .frame(width: side, height: side)
             }
+            .frame(width: side, height: side)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 
@@ -978,9 +1114,20 @@ struct DashboardView: View {
         RoundedRectangle(cornerRadius: 8)
             .fill(.quaternary)
             .overlay {
-                Image(systemName: appSession.selectedLibrary == .likedSongs ? "heart.fill" : "music.note")
+                Image(systemName: libraryCoverPlaceholderSymbol)
                     .foregroundStyle(.secondary)
             }
+    }
+
+    private var libraryCoverPlaceholderSymbol: String {
+        switch appSession.selectedLibrary {
+        case .likedSongs:
+            return "heart.fill"
+        case .album:
+            return "square.stack.fill"
+        default:
+            return "music.note"
+        }
     }
 
     // MARK: - Profile
@@ -1040,8 +1187,8 @@ struct DashboardView: View {
                 profileStat(value: "\(appSession.playlists.count)", label: "Playlists")
             }
 
-            if !appSession.likedSongs.isEmpty {
-                profileStat(value: "\(appSession.likedSongs.count)", label: "Liked Songs")
+            if appSession.likedSongsTotalCount > 0 {
+                profileStat(value: "\(appSession.likedSongsTotalCount)", label: "Liked Songs")
             }
         }
         .frame(maxWidth: 480)
@@ -1152,27 +1299,12 @@ struct DashboardView: View {
 
     @ViewBuilder
     private func profileAvatar(size: CGFloat) -> some View {
-        Group {
-            if let url = appSession.currentUserProfile?.profileImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        Circle()
-                            .fill(Color.secondary.opacity(0.25))
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        profilePlaceholder
-                    @unknown default:
-                        Circle()
-                            .fill(Color.secondary.opacity(0.25))
-                    }
-                }
-            } else {
-                profilePlaceholder
-            }
+        RemoteArtworkImage(url: appSession.currentUserProfile?.profileImageURL, maxPixelSize: size * 2) { image in
+            image
+                .resizable()
+                .scaledToFill()
+        } placeholder: {
+            profilePlaceholder
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
@@ -1223,25 +1355,12 @@ private struct SearchTopResultCardLayout: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
-            Group {
-                if let imageURL {
-                    AsyncImage(url: imageURL) { phase in
-                        switch phase {
-                        case .empty:
-                            RoundedRectangle(cornerRadius: 10).fill(.quaternary)
-                        case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure:
-                            placeholderArt
-                        @unknown default:
-                            RoundedRectangle(cornerRadius: 10).fill(.quaternary)
-                        }
-                    }
-                } else {
-                    placeholderArt
-                }
+            RemoteArtworkImage(url: imageURL, maxPixelSize: 160) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                placeholderArt
             }
             .frame(width: 80, height: 80)
             .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -1284,24 +1403,13 @@ private struct SearchArtistRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if let url = artist.profileImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        avatarPlaceholder
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 48, height: 48)
-                            .clipShape(Circle())
-                    case .failure:
-                        avatarPlaceholder
-                    @unknown default:
-                        avatarPlaceholder
-                    }
-                }
-            } else {
+            RemoteArtworkImage(url: artist.profileImageURL, maxPixelSize: 96) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 48, height: 48)
+                    .clipShape(Circle())
+            } placeholder: {
                 avatarPlaceholder
             }
 
@@ -1332,27 +1440,18 @@ private struct SearchArtistRow: View {
 
 private struct SearchAlbumRow: View {
     let album: SpotifySearchAlbumItem
+    /// When false, omit the decorative play icon (caller supplies its own play control).
+    var showsTrailingPlayGlyph: Bool = true
 
     var body: some View {
         HStack(spacing: 12) {
-            if let url = album.coverURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        artPlaceholder
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 48, height: 48)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                    case .failure:
-                        artPlaceholder
-                    @unknown default:
-                        artPlaceholder
-                    }
-                }
-            } else {
+            RemoteArtworkImage(url: album.coverURL, maxPixelSize: 96) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            } placeholder: {
                 artPlaceholder
             }
 
@@ -1365,8 +1464,10 @@ private struct SearchAlbumRow: View {
                     .lineLimit(1)
             }
             Spacer()
-            Image(systemName: "play.circle")
-                .foregroundStyle(.secondary)
+            if showsTrailingPlayGlyph {
+                Image(systemName: "play.circle")
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.vertical, 8)
         .contentShape(Rectangle())
@@ -1385,24 +1486,13 @@ private struct SearchPlaylistRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if let url = playlist.coverURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        artPlaceholder
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 48, height: 48)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                    case .failure:
-                        artPlaceholder
-                    @unknown default:
-                        artPlaceholder
-                    }
-                }
-            } else {
+            RemoteArtworkImage(url: playlist.coverURL, maxPixelSize: 96) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            } placeholder: {
                 artPlaceholder
             }
 
@@ -1437,11 +1527,18 @@ private struct SearchPlaylistRow: View {
 private struct LikedSongCarouselCard: View {
     let track: SpotifyTrack
     let onPlay: () -> Void
+    var onAlbumArtTap: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topTrailing) {
-                Button(action: onPlay) {
+                Button {
+                    if let onAlbumArtTap {
+                        onAlbumArtTap()
+                    } else {
+                        onPlay()
+                    }
+                } label: {
                     carouselArt
                 }
                 .buttonStyle(.plain)
@@ -1473,25 +1570,11 @@ private struct LikedSongCarouselCard: View {
     @ViewBuilder
     private var carouselArt: some View {
         Group {
-            if let url = track.largestAlbumImageURL {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(.quaternary)
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(.quaternary)
-                            .overlay { Image(systemName: "music.note").foregroundStyle(.secondary) }
-                    @unknown default:
-                        RoundedRectangle(cornerRadius: 8).fill(.quaternary)
-                    }
-                }
-            } else {
+            RemoteArtworkImage(url: track.largestAlbumImageURL, maxPixelSize: 280) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(.quaternary)
                     .overlay { Image(systemName: "music.note").foregroundStyle(.secondary) }

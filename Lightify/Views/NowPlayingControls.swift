@@ -6,7 +6,9 @@
 import SwiftUI
 
 struct NowPlayingControls: View {
+    @Environment(AppSession.self) private var appSession
     @Environment(PlaybackViewModel.self) private var playback
+    @Environment(\.openWindow) private var openWindow
     @State private var volumePopoverShown = false
     @State private var queuePopoverShown = false
     @State private var isCollapsed = false
@@ -56,9 +58,22 @@ struct NowPlayingControls: View {
 
     private var collapsedIsland: some View {
         HStack(spacing: 10) {
-            collapsedArtwork
-                .frame(width: 40, height: 40)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Button {
+                Task {
+                    await appSession.openAlbumFromPlaybackState(
+                        contextURI: playback.nowPlaying?.contextURI,
+                        trackURI: playback.nowPlaying?.uri,
+                        albumNameHint: playback.nowPlaying?.albumName
+                    )
+                }
+            } label: {
+                collapsedArtwork
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(playback.nowPlaying == nil)
+            .help("Open album")
 
             Button {
                 playback.playPause()
@@ -90,22 +105,11 @@ struct NowPlayingControls: View {
 
     @ViewBuilder
     private var collapsedArtwork: some View {
-        if let url = playback.nowPlaying?.artworkURL {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .empty:
-                    collapsedArtPlaceholder
-                case let .success(image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .failure:
-                    collapsedArtPlaceholder
-                @unknown default:
-                    collapsedArtPlaceholder
-                }
-            }
-        } else {
+        RemoteArtworkImage(url: playback.nowPlaying?.artworkURL, maxPixelSize: 96) { image in
+            image
+                .resizable()
+                .scaledToFill()
+        } placeholder: {
             collapsedArtPlaceholder
         }
     }
@@ -133,6 +137,18 @@ struct NowPlayingControls: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("Minimize playback controls")
+
+            Button {
+                volumePopoverShown = false
+                queuePopoverShown = false
+                openWindow(id: MiniPlayerWindowScene.id)
+            } label: {
+                Image(systemName: "pip.enter")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Open mini player")
 
             Group {
                 Button {
@@ -325,46 +341,48 @@ struct NowPlayingControls: View {
 
 private struct QueueTrackRow: View {
     let track: SpotifyTrack
+    @Environment(PlaybackViewModel.self) private var playback
+
+    private var playDisabled: Bool { !playback.isWebPlayerReady }
 
     var body: some View {
-        HStack(spacing: 12) {
-            queueThumbnail
-                .frame(width: 48, height: 48)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        Button {
+            playback.playTrack(id: track.id)
+        } label: {
+            HStack(spacing: 12) {
+                queueThumbnail
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(track.name)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                Text(track.primaryArtistName)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(track.name)
+                        .font(.body.weight(.medium))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(.primary)
+                    Text(track.primaryArtistName)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 8)
+        .buttonStyle(.plain)
+        .disabled(playDisabled)
+        .opacity(playDisabled ? 0.45 : 1)
+        .accessibilityLabel("Play \(track.name) by \(track.primaryArtistName)")
     }
 
     @ViewBuilder
     private var queueThumbnail: some View {
-        if let url = track.smallImageURL {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .empty:
-                    queuePlaceholder
-                case let .success(image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .failure:
-                    queuePlaceholder
-                @unknown default:
-                    queuePlaceholder
-                }
-            }
-        } else {
+        RemoteArtworkImage(url: track.smallImageURL, maxPixelSize: 96) { image in
+            image
+                .resizable()
+                .scaledToFill()
+        } placeholder: {
             queuePlaceholder
         }
     }
@@ -388,91 +406,9 @@ private extension View {
     }
 }
 
-private struct PlaybackScrubber: View {
-    let positionMs: Int
-    let durationMs: Int
-    let isEnabled: Bool
-    let onSeek: (Int) -> Void
-
-    @State private var dragFraction: Double?
-
-    var body: some View {
-        GeometryReader { proxy in
-            let progressFraction = displayedFraction
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.white.opacity(0.14))
-                    .frame(height: 3)
-
-                Capsule()
-                    .fill(Color("AccentColor").opacity(isEnabled ? 0.9 : 0.35))
-                    .frame(width: max(0, proxy.size.width * CGFloat(progressFraction)), height: 3)
-            }
-            .frame(maxHeight: .infinity, alignment: .center)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        guard canSeek else { return }
-                        dragFraction = fraction(for: value.location.x, width: proxy.size.width)
-                    }
-                    .onEnded { value in
-                        guard canSeek else {
-                            dragFraction = nil
-                            return
-                        }
-                        let targetFraction = fraction(for: value.location.x, width: proxy.size.width)
-                        dragFraction = nil
-                        onSeek(Int((Double(durationMs) * targetFraction).rounded()))
-                    }
-            )
-        }
-        .frame(height: 12)
-        .help(canSeek ? "Seek" : "Playback progress")
-        .accessibilityElement()
-        .accessibilityLabel("Playback position")
-        .accessibilityValue(accessibilityValue)
-    }
-
-    private var canSeek: Bool {
-        isEnabled && durationMs > 0
-    }
-
-    private var displayedFraction: Double {
-        if let dragFraction {
-            return dragFraction
-        }
-        guard durationMs > 0 else { return 0 }
-        return min(max(Double(positionMs) / Double(durationMs), 0), 1)
-    }
-
-    private var accessibilityValue: String {
-        guard durationMs > 0 else { return "Unavailable" }
-        return "\(formattedTime(positionMs)) of \(formattedTime(durationMs))"
-    }
-
-    private func fraction(for xPosition: CGFloat, width: CGFloat) -> Double {
-        guard width > 0 else { return 0 }
-        let clampedX = min(max(xPosition, 0), width)
-        return Double(clampedX / width)
-    }
-
-    private func formattedTime(_ milliseconds: Int) -> String {
-        let totalSeconds = max(milliseconds / 1000, 0)
-        let hours = totalSeconds / 3600
-        let minutes = (totalSeconds % 3600) / 60
-        let seconds = totalSeconds % 60
-
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-        return String(format: "%d:%02d", minutes, seconds)
-    }
-}
-
 #Preview {
     NowPlayingControls()
+        .environment(AppSession())
         .environment(PlaybackViewModel())
         .padding()
         .frame(width: 720)

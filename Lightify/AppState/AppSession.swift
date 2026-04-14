@@ -21,13 +21,14 @@ final class AppSession {
         case ready
     }
 
-    /// Sidebar + detail: Home overview, Liked Songs (saved tracks), catalog search, a user playlist, or an artist detail screen.
+    /// Sidebar + detail: Home overview, Liked Songs (saved tracks), catalog search, a user playlist, album detail, or an artist detail screen.
     enum LibrarySelection: Equatable, Hashable, Identifiable {
         case home
         case profile
         case likedSongs
         case search
         case playlist(id: String)
+        case album(id: String, nameHint: String?)
         case artist(id: String, nameHint: String?)
 
         var id: String {
@@ -42,6 +43,8 @@ final class AppSession {
                 return "library.search"
             case .playlist(let playlistID):
                 return playlistID
+            case .album(let albumID, _):
+                return "album.\(albumID)"
             case .artist(let artistID, _):
                 return "artist.\(artistID)"
             }
@@ -59,6 +62,8 @@ final class AppSession {
                 return "Search"
             case .playlist(let playlistID):
                 return playlists.first(where: { $0.id == playlistID })?.name ?? "Playlist"
+            case .album(_, let nameHint):
+                return nameHint ?? "Album"
             case .artist(_, let nameHint):
                 return nameHint ?? "Artist"
             }
@@ -76,13 +81,22 @@ final class AppSession {
     static let playlistTracksUnavailableMessage =
         "Sorry, but we can only show playlists you own. You can still play the playlist."
 
-    /// Saved tracks (`GET /me/tracks`), used for the Home carousel and for the list when Liked Songs is selected.
-    private(set) var likedSongs: [SpotifyTrack] = [] {
-        didSet { likedTrackIDs = Set(likedSongs.map(\.id)) }
-    }
+    /// Saved tracks (`GET /me/tracks`), windowed in memory for Home and the Liked Songs list.
+    private(set) var likedSongs: [SpotifyTrack] = []
+
+    /// Full ordered id list for the user’s saved library; much cheaper to keep than every full track payload.
+    private(set) var likedSongIDsInOrder: [String] = []
+
+    /// Total count reported by Spotify even when only the first page is loaded.
+    private(set) var likedSongsTotalCount: Int = 0
 
     /// IDs of saved tracks; updated whenever `likedSongs` changes (O(1) heart state).
     private(set) var likedTrackIDs: Set<String> = []
+
+    /// True while appending the next saved-tracks page for the Liked Songs list.
+    private(set) var isLoadingMoreLikedSongs: Bool = false
+
+    private var nextLikedSongsOffset: Int?
 
     /// Prevents duplicate toggles while a save/remove request is in flight.
     private var likingTrackIDs: Set<String> = []
@@ -91,6 +105,14 @@ final class AppSession {
     private(set) var playlists: [SpotifyPlaylistItem] = []
     /// Cached `GET /playlists/{id}/tracks` results.
     private var playlistTracksCache: [String: [SpotifyTrack]] = [:]
+    private var playlistTrackCacheOrder: [String] = []
+
+    /// Cached `GET /albums/{id}/tracks` results.
+    private var albumTracksCache: [String: [SpotifyTrack]] = [:]
+    private var albumTrackCacheOrder: [String] = []
+
+    /// Album header metadata from `GET /albums/{id}` or seeded from search / track payloads.
+    private var albumMetadataByID: [String: SpotifyAlbum] = [:]
 
     /// Playlist metadata when the user opens a playlist from search (or other flows) before it appears in `/me/playlists`.
     private var playlistMetadataByID: [String: SpotifyPlaylistItem] = [:]
@@ -113,6 +135,8 @@ final class AppSession {
     var isMutatingSelectedPlaylist: Bool = false
 
     private var ongoingPlaylistAddKeys: Set<String> = []
+    /// Last non-album library selection so album detail can offer a contextual Back action.
+    private var albumBackSelection: LibrarySelection?
 
     /// `market` for playlist endpoints ([Get Playlist Items](https://developer.spotify.com/documentation/web-api/reference/get-playlists-items)); ISO 3166-1 alpha-2 from `GET /v1/me` when available.
     private var playlistMarketForAPI: String {
@@ -122,6 +146,12 @@ final class AppSession {
     var selectedLibrary: LibrarySelection = .home
     /// True while fetching tracks for a playlist that isn’t cached yet.
     private(set) var isLoadingPlaylistTracks: Bool = false
+
+    /// True while fetching tracks for an album that isn’t cached yet.
+    private(set) var isLoadingAlbumTracks: Bool = false
+
+    /// Non-fatal notes when album header or track list partially fails (403 on one call, etc.).
+    private(set) var albumCatalogWarning: String?
 
     /// Bound to the Search screen query field; not used for API until the user runs a search.
     var searchQueryText: String = ""
@@ -163,6 +193,11 @@ final class AppSession {
     private let authService = SpotifyAuthService()
     private let api = SpotifyAPIClient()
 
+    private static let initialLikedSongsPageSize = 50
+    private static let likedSongsPrefetchThreshold = 8
+    private static let maxPlaylistTrackCacheEntries = 8
+    private static let maxAlbumTrackCacheEntries = 8
+
     /// Tracks shown in the main section for the current selection.
     var tracksForSelectedLibrary: [SpotifyTrack] {
         switch selectedLibrary {
@@ -172,6 +207,8 @@ final class AppSession {
             return likedSongs
         case .playlist(let playlistID):
             return playlistTracksCache[playlistID] ?? []
+        case .album(let albumID, _):
+            return albumTracksCache[albumID] ?? []
         }
     }
 
@@ -185,9 +222,25 @@ final class AppSession {
         switch selectedLibrary {
         case .playlist(let playlistID):
             return resolvedPlaylist(id: playlistID)?.name ?? "Playlist"
+        case .album(let albumID, let hint):
+            return albumMetadataByID[albumID]?.name ?? hint ?? "Album"
         default:
             return selectedLibrary.title(playlists: playlists)
         }
+    }
+
+    /// Album header for the current selection when it is an album.
+    func resolvedAlbum(id: String) -> SpotifyAlbum? {
+        albumMetadataByID[id]
+    }
+
+    var isShowingAlbumDetail: Bool {
+        if case .album = selectedLibrary { return true }
+        return false
+    }
+
+    var canGoBackFromAlbum: Bool {
+        isShowingAlbumDetail && albumBackSelection != nil
     }
 
     /// Open a playlist in the main detail area (e.g. from search). Seeds metadata when the playlist isn’t in `/me/playlists` yet.
@@ -198,6 +251,114 @@ final class AppSession {
             playlistMetadataByID[playlist.id] = playlist
         }
         await selectLibrary(.playlist(id: playlist.id))
+    }
+
+    /// Opens album detail; optionally seeds hero metadata (e.g. from search) before network loads complete.
+    func openAlbum(id albumID: String, nameHint: String?, seedAlbum: SpotifyAlbum? = nil) async {
+        let trimmed = albumID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        loadError = nil
+        if case .album = selectedLibrary {
+            // Preserve the original non-album source while browsing between albums.
+        } else {
+            albumBackSelection = selectedLibrary
+        }
+        if let seed = seedAlbum {
+            albumMetadataByID[trimmed] = seed
+        }
+        await selectLibrary(.album(id: trimmed, nameHint: nameHint ?? seedAlbum?.name))
+    }
+
+    func openAlbumFromSearch(_ album: SpotifySearchAlbumItem) async {
+        await openAlbum(id: album.id, nameHint: album.name, seedAlbum: SpotifyAlbum(fromSearchItem: album))
+    }
+
+    /// Resolves album from track `album.id`, or fetches `GET /tracks/{id}` when missing (e.g. some Web Playback payloads).
+    func openAlbum(from track: SpotifyTrack) async {
+        if let aid = track.albumId, !aid.isEmpty {
+            await openAlbum(id: aid, nameHint: track.album?.name, seedAlbum: track.album)
+            return
+        }
+        guard !track.id.isEmpty else { return }
+        do {
+            let access = try await validAccessToken()
+            let full = try await api.fetchTrack(accessToken: access, id: track.id)
+            if let aid = full.albumId, !aid.isEmpty {
+                await openAlbum(id: aid, nameHint: full.album?.name, seedAlbum: full.album)
+            } else {
+                loadError = "Couldn’t find this album in Spotify’s catalog for this track."
+            }
+        } catch let apiErr as SpotifyAPIError {
+            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
+                do {
+                    let refreshed = try await authService.refreshSession(session)
+                    try SpotifyTokenStore.save(refreshed)
+                    storedSession = refreshed
+                    let full = try await api.fetchTrack(accessToken: refreshed.accessToken, id: track.id)
+                    if let aid = full.albumId, !aid.isEmpty {
+                        await openAlbum(id: aid, nameHint: full.album?.name, seedAlbum: full.album)
+                    } else {
+                        loadError = "Couldn’t find this album in Spotify’s catalog for this track."
+                    }
+                } catch {
+                    loadError = "Session expired. Please sign in again."
+                    signOut()
+                }
+            } else {
+                loadError = apiErr.localizedDescription
+            }
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    /// Opens the album for the current Web Playback state (album context or track’s album via REST).
+    func openAlbumFromPlaybackState(
+        contextURI: String?,
+        trackURI: String?,
+        albumNameHint: String?
+    ) async {
+        loadError = nil
+        if let ctx = contextURI, ctx.hasPrefix("spotify:album:") {
+            let id = String(ctx.dropFirst("spotify:album:".count))
+            await openAlbum(id: id, nameHint: albumNameHint)
+            return
+        }
+        guard let uri = trackURI, uri.hasPrefix("spotify:track:") else {
+            loadError = "Album isn’t available for this playback state yet."
+            return
+        }
+        let tid = String(uri.dropFirst("spotify:track:".count))
+        guard !tid.isEmpty else { return }
+        do {
+            let access = try await validAccessToken()
+            let track = try await api.fetchTrack(accessToken: access, id: tid)
+            await openAlbum(from: track)
+        } catch let apiErr as SpotifyAPIError {
+            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
+                do {
+                    let refreshed = try await authService.refreshSession(session)
+                    try SpotifyTokenStore.save(refreshed)
+                    storedSession = refreshed
+                    let track = try await api.fetchTrack(accessToken: refreshed.accessToken, id: tid)
+                    await openAlbum(from: track)
+                } catch {
+                    loadError = "Session expired. Please sign in again."
+                    signOut()
+                }
+            } else {
+                loadError = apiErr.localizedDescription
+            }
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    func goBackFromAlbum() async {
+        guard case .album = selectedLibrary else { return }
+        let target = albumBackSelection ?? .home
+        albumBackSelection = nil
+        await selectLibrary(target)
     }
 
     func bootstrap() async {
@@ -250,11 +411,23 @@ final class AppSession {
         storedSession = nil
         currentUserProfile = nil
         likedSongs = []
+        likedSongIDsInOrder = []
+        likedSongsTotalCount = 0
+        likedTrackIDs = []
+        isLoadingMoreLikedSongs = false
+        nextLikedSongsOffset = nil
         likingTrackIDs = []
         recentlyPlayed = []
         playlists = []
         playlistTracksCache = [:]
+        playlistTrackCacheOrder = []
         playlistMetadataByID = [:]
+        albumTracksCache = [:]
+        albumTrackCacheOrder = []
+        albumMetadataByID = [:]
+        albumCatalogWarning = nil
+        isLoadingAlbumTracks = false
+        albumBackSelection = nil
         isNewPlaylistSheetPresented = false
         pendingTrackForNewPlaylist = nil
         isCreatingPlaylist = false
@@ -277,7 +450,7 @@ final class AppSession {
         await loadLibrary(session: session)
     }
 
-    /// Call when the user picks a sidebar row. Loads playlist tracks on demand.
+    /// Call when the user picks a sidebar row. Loads playlist or album tracks on demand.
     func selectLibrary(_ selection: LibrarySelection) async {
         selectedLibrary = selection
         if selection != .search {
@@ -286,52 +459,194 @@ final class AppSession {
         if case .playlist = selection {} else {
             isPlaylistTrackListForbidden = false
         }
-        guard case .playlist(let playlistID) = selection else { return }
+        albumCatalogWarning = nil
 
-        if let idx = playlists.firstIndex(where: { $0.id == playlistID }),
-           playlists[idx].images?.isEmpty ?? true
-        {
-            await fetchPlaylistCoverIfNeeded(playlistID: playlistID, index: idx)
+        switch selection {
+        case .likedSongs:
+            await loadMoreLikedSongsIfNeeded()
+
+        case .playlist(let playlistID):
+            if let idx = playlists.firstIndex(where: { $0.id == playlistID }),
+               playlists[idx].images?.isEmpty ?? true
+            {
+                await fetchPlaylistCoverIfNeeded(playlistID: playlistID, index: idx)
+            }
+
+            if playlistTracksCache[playlistID] != nil {
+                touchPlaylistTrackCacheEntry(playlistID)
+                return
+            }
+
+            isLoadingPlaylistTracks = true
+            loadError = nil
+            isPlaylistTrackListForbidden = false
+            defer { isLoadingPlaylistTracks = false }
+
+            do {
+                let access = try await validAccessToken()
+                let tracks = try await api.fetchAllPlaylistTracks(
+                    accessToken: access,
+                    playlistID: playlistID,
+                    market: playlistMarketForAPI
+                )
+                cachePlaylistTracks(tracks, for: playlistID)
+            } catch let apiErr as SpotifyAPIError {
+                if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
+                    do {
+                        let refreshed = try await authService.refreshSession(session)
+                        try SpotifyTokenStore.save(refreshed)
+                        storedSession = refreshed
+                        let tracks = try await api.fetchAllPlaylistTracks(
+                            accessToken: refreshed.accessToken,
+                            playlistID: playlistID,
+                            market: playlistMarketForAPI
+                        )
+                        cachePlaylistTracks(tracks, for: playlistID)
+                    } catch {
+                        loadError = "Session expired. Please sign in again."
+                        signOut()
+                    }
+                } else if case let .http(code, _) = apiErr, code == 403 {
+                    isPlaylistTrackListForbidden = true
+                } else {
+                    loadError = apiErr.localizedDescription
+                }
+            } catch {
+                loadError = error.localizedDescription
+            }
+
+        case .album(let albumID, _):
+            await loadAlbumTracksIfNeeded(albumID: albumID)
+
+        default:
+            break
+        }
+    }
+
+    /// Loads album metadata and tracks (partial success allowed, like `loadArtistCatalog`).
+    private func loadAlbumTracksIfNeeded(albumID: String) async {
+        if albumTracksCache[albumID] != nil {
+            touchAlbumTrackCacheEntry(albumID)
+            await refreshAlbumMetadataIfNeeded(albumID: albumID)
+            return
         }
 
-        if playlistTracksCache[playlistID] != nil { return }
-
-        isLoadingPlaylistTracks = true
+        isLoadingAlbumTracks = true
         loadError = nil
-        isPlaylistTrackListForbidden = false
-        defer { isLoadingPlaylistTracks = false }
+        defer { isLoadingAlbumTracks = false }
+
+        let market = playlistMarketForAPI
+
+        let fetchParts: (String) async throws -> (SpotifyAlbum?, [SpotifyTrack], String?) = { token in
+            var meta: SpotifyAlbum?
+            var tracks: [SpotifyTrack] = []
+            var notes: [String] = []
+
+            do {
+                meta = try await self.api.fetchAlbum(accessToken: token, albumID: albumID, market: market)
+            } catch let apiErr as SpotifyAPIError {
+                if case .http(401, _) = apiErr { throw apiErr }
+                notes.append(self.catalogFailureMessage(apiErr, context: "album details"))
+            } catch {
+                notes.append(error.localizedDescription)
+            }
+
+            do {
+                tracks = try await self.api.fetchAllAlbumTracks(
+                    accessToken: token,
+                    albumID: albumID,
+                    market: market
+                )
+            } catch let apiErr as SpotifyAPIError {
+                if case .http(401, _) = apiErr { throw apiErr }
+                notes.append(self.catalogFailureMessage(apiErr, context: "album tracks"))
+            } catch {
+                notes.append(error.localizedDescription)
+            }
+
+            let albumForTracks = meta ?? self.albumMetadataByID[albumID]
+            if let albumForTracks {
+                tracks = tracks.map { $0.replacingAlbum(albumForTracks) }
+            }
+
+            if let meta {
+                self.albumMetadataByID[albumID] = meta
+            }
+            if !tracks.isEmpty {
+                self.cacheAlbumTracks(tracks, for: albumID)
+            }
+
+            let warning = notes.isEmpty ? nil : notes.joined(separator: "\n")
+            return (meta, tracks, warning)
+        }
 
         do {
             let access = try await validAccessToken()
-            let tracks = try await api.fetchAllPlaylistTracks(
-                accessToken: access,
-                playlistID: playlistID,
-                market: playlistMarketForAPI
-            )
-            playlistTracksCache[playlistID] = tracks
+            let result = try await fetchParts(access)
+            albumCatalogWarning = result.2
+            if result.1.isEmpty, result.0 == nil, albumMetadataByID[albumID] == nil {
+                loadError = albumCatalogWarning ?? "Couldn’t load this album."
+            }
         } catch let apiErr as SpotifyAPIError {
             if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
                 do {
                     let refreshed = try await authService.refreshSession(session)
                     try SpotifyTokenStore.save(refreshed)
                     storedSession = refreshed
-                    let tracks = try await api.fetchAllPlaylistTracks(
-                        accessToken: refreshed.accessToken,
-                        playlistID: playlistID,
-                        market: playlistMarketForAPI
-                    )
-                    playlistTracksCache[playlistID] = tracks
+                    let result = try await fetchParts(refreshed.accessToken)
+                    albumCatalogWarning = result.2
+                    if result.1.isEmpty, result.0 == nil, albumMetadataByID[albumID] == nil {
+                        loadError = albumCatalogWarning ?? "Couldn’t load this album."
+                    }
                 } catch {
                     loadError = "Session expired. Please sign in again."
                     signOut()
                 }
-            } else if case let .http(code, _) = apiErr, code == 403 {
-                isPlaylistTrackListForbidden = true
             } else {
                 loadError = apiErr.localizedDescription
             }
         } catch {
             loadError = error.localizedDescription
+        }
+    }
+
+    /// Fetches `GET /albums/{id}` when the cache has tracks but metadata is missing (e.g. cold open).
+    private func refreshAlbumMetadataIfNeeded(albumID: String) async {
+        guard albumMetadataByID[albumID] == nil else { return }
+        let market = playlistMarketForAPI
+        do {
+            let access = try await validAccessToken()
+            let meta = try await api.fetchAlbum(accessToken: access, albumID: albumID, market: market)
+            albumMetadataByID[albumID] = meta
+        } catch let apiErr as SpotifyAPIError {
+            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
+                do {
+                    let refreshed = try await authService.refreshSession(session)
+                    try SpotifyTokenStore.save(refreshed)
+                    storedSession = refreshed
+                    let meta = try await api.fetchAlbum(
+                        accessToken: refreshed.accessToken,
+                        albumID: albumID,
+                        market: market
+                    )
+                    albumMetadataByID[albumID] = meta
+                } catch {}
+            }
+        } catch {}
+    }
+
+    private func catalogFailureMessage(_ error: SpotifyAPIError, context: String) -> String {
+        switch error {
+        case let .http(403, body):
+            let detail = body.flatMap { $0.isEmpty ? nil : " \($0)" } ?? ""
+            return """
+            Spotify returned Forbidden (403) for \(context).\(detail)
+            This can happen when the Web API blocks an endpoint for your app (quota / development mode — see https://developer.spotify.com/documentation/web-api/concepts/quota-modes). Try signing out and signing in again, or request extended API access if you need full catalog data.
+            """
+        case .http:
+            return "\(context): \(error.localizedDescription)"
+        case .decoding:
+            return "\(context): \(error.localizedDescription)"
         }
     }
 
@@ -424,7 +739,16 @@ final class AppSession {
         loadError = nil
         isPlaylistTrackListForbidden = false
         playlistTracksCache = [:]
+        playlistTrackCacheOrder = []
         playlistMetadataByID = [:]
+        albumTracksCache = [:]
+        albumTrackCacheOrder = []
+        albumMetadataByID = [:]
+        albumCatalogWarning = nil
+        isLoadingAlbumTracks = false
+        isLoadingMoreLikedSongs = false
+        nextLikedSongsOffset = nil
+        albumBackSelection = nil
         clearSearchState()
         selectedLibrary = .home
         do {
@@ -436,10 +760,22 @@ final class AppSession {
             }
 
             async let playlistsTask = api.fetchUserPlaylists(accessToken: access, limit: 50)
-            async let likedTask = api.fetchAllSavedTracks(accessToken: access)
+            async let likedPageTask = api.fetchSavedTracksPage(
+                accessToken: access,
+                limit: Self.initialLikedSongsPageSize,
+                offset: 0
+            )
+            async let likedIDsTask = api.fetchAllSavedTrackIDs(accessToken: access)
 
             playlists = try await playlistsTask
-            likedSongs = try await likedTask
+            let likedPage = try await likedPageTask
+            applyLikedSongsPage(likedPage, replaceExisting: true)
+            do {
+                let likedIDs = try await likedIDsTask
+                applyLikedSongIDs(likedIDs, totalHint: likedPage.total)
+            } catch {
+                applyLikedSongIDs(likedSongs.map(\.id), totalHint: likedPage.total)
+            }
 
             do {
                 let items = try await api.fetchRecentlyPlayed(accessToken: access)
@@ -482,6 +818,10 @@ final class AppSession {
         likedTrackIDs.contains(trackID)
     }
 
+    var hasMoreLikedSongsToLoad: Bool {
+        nextLikedSongsOffset != nil
+    }
+
     func isTogglingLikedTrack(_ trackID: String) -> Bool {
         likingTrackIDs.contains(trackID)
     }
@@ -492,13 +832,26 @@ final class AppSession {
         let id = track.id
         guard !likingTrackIDs.contains(id) else { return }
 
-        let wasLiked = likedSongs.contains { $0.id == id }
+        let wasLiked = likedTrackIDs.contains(id)
         let snapshotSongs = likedSongs
+        let snapshotIDs = likedSongIDsInOrder
+        let snapshotLikedIDs = likedTrackIDs
+        let snapshotTotal = likedSongsTotalCount
 
         if wasLiked {
             likedSongs.removeAll { $0.id == id }
-        } else if !likedSongs.contains(where: { $0.id == id }) {
-            likedSongs.insert(track, at: 0)
+            likedSongIDsInOrder.removeAll { $0 == id }
+            likedTrackIDs.remove(id)
+            likedSongsTotalCount = max(0, likedSongsTotalCount - 1)
+        } else {
+            if !likedSongs.contains(where: { $0.id == id }) {
+                likedSongs.insert(track, at: 0)
+            }
+            if !likedSongIDsInOrder.contains(id) {
+                likedSongIDsInOrder.insert(id, at: 0)
+            }
+            likedTrackIDs.insert(id)
+            likedSongsTotalCount += 1
         }
 
         likingTrackIDs.insert(id)
@@ -525,20 +878,137 @@ final class AppSession {
                     }
                 } catch {
                     likedSongs = snapshotSongs
+                    likedSongIDsInOrder = snapshotIDs
+                    likedTrackIDs = snapshotLikedIDs
+                    likedSongsTotalCount = snapshotTotal
                     loadError = "Couldn’t update Liked Songs. Try again."
                 }
             } else if case let .http(code, _) = apiErr, code == 403 {
                 likedSongs = snapshotSongs
+                likedSongIDsInOrder = snapshotIDs
+                likedTrackIDs = snapshotLikedIDs
+                likedSongsTotalCount = snapshotTotal
                 authError =
                     "Spotify returned Forbidden (403). Sign out and sign in again so your account grants library save access (scope user-library-modify). Token refresh alone does not add new permissions."
             } else {
                 likedSongs = snapshotSongs
+                likedSongIDsInOrder = snapshotIDs
+                likedTrackIDs = snapshotLikedIDs
+                likedSongsTotalCount = snapshotTotal
                 loadError = apiErr.localizedDescription
             }
         } catch {
             likedSongs = snapshotSongs
+            likedSongIDsInOrder = snapshotIDs
+            likedTrackIDs = snapshotLikedIDs
+            likedSongsTotalCount = snapshotTotal
             loadError = error.localizedDescription
         }
+    }
+
+    func loadMoreLikedSongsIfNeeded(currentTrackID: String? = nil) async {
+        guard !isLoadingMoreLikedSongs else { return }
+        guard let offset = nextLikedSongsOffset else { return }
+
+        if let currentTrackID,
+           let index = likedSongs.firstIndex(where: { $0.id == currentTrackID })
+        {
+            let threshold = max(likedSongs.count - Self.likedSongsPrefetchThreshold, 0)
+            guard index >= threshold else { return }
+        } else if !likedSongs.isEmpty && selectedLibrary != .likedSongs {
+            return
+        }
+
+        isLoadingMoreLikedSongs = true
+        defer { isLoadingMoreLikedSongs = false }
+
+        do {
+            let access = try await validAccessToken()
+            let page = try await api.fetchSavedTracksPage(
+                accessToken: access,
+                limit: Self.initialLikedSongsPageSize,
+                offset: offset
+            )
+            applyLikedSongsPage(page, replaceExisting: false)
+        } catch let apiErr as SpotifyAPIError {
+            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
+                do {
+                    let refreshed = try await authService.refreshSession(session)
+                    try SpotifyTokenStore.save(refreshed)
+                    storedSession = refreshed
+                    let page = try await api.fetchSavedTracksPage(
+                        accessToken: refreshed.accessToken,
+                        limit: Self.initialLikedSongsPageSize,
+                        offset: offset
+                    )
+                    applyLikedSongsPage(page, replaceExisting: false)
+                } catch {
+                    loadError = "Session expired. Please sign in again."
+                    signOut()
+                }
+            } else {
+                loadError = apiErr.localizedDescription
+            }
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    private func applyLikedSongIDs(_ ids: [String], totalHint: Int?) {
+        likedSongIDsInOrder = ids
+        likedTrackIDs = Set(ids)
+        likedSongsTotalCount = max(totalHint ?? 0, ids.count, likedSongs.count)
+    }
+
+    private func applyLikedSongsPage(_ page: SpotifySavedTracksPage, replaceExisting: Bool) {
+        let pageTracks = page.items.compactMap(\.track)
+        if replaceExisting {
+            likedSongs = pageTracks
+        } else {
+            var merged = likedSongs
+            for track in pageTracks where !merged.contains(where: { $0.id == track.id }) {
+                merged.append(track)
+            }
+            likedSongs = merged
+        }
+        likedSongsTotalCount = max(page.total ?? 0, likedSongsTotalCount, likedSongs.count)
+        if let next = page.next, !next.isEmpty {
+            nextLikedSongsOffset = (page.offset ?? 0) + (page.limit ?? pageTracks.count)
+        } else {
+            nextLikedSongsOffset = nil
+        }
+    }
+
+    private func cachePlaylistTracks(_ tracks: [SpotifyTrack], for playlistID: String) {
+        playlistTracksCache[playlistID] = tracks
+        touchPlaylistTrackCacheEntry(playlistID)
+        while playlistTrackCacheOrder.count > Self.maxPlaylistTrackCacheEntries,
+              let evictedID = playlistTrackCacheOrder.first
+        {
+            playlistTrackCacheOrder.removeFirst()
+            playlistTracksCache.removeValue(forKey: evictedID)
+        }
+    }
+
+    private func touchPlaylistTrackCacheEntry(_ playlistID: String) {
+        playlistTrackCacheOrder.removeAll { $0 == playlistID }
+        playlistTrackCacheOrder.append(playlistID)
+    }
+
+    private func cacheAlbumTracks(_ tracks: [SpotifyTrack], for albumID: String) {
+        albumTracksCache[albumID] = tracks
+        touchAlbumTrackCacheEntry(albumID)
+        while albumTrackCacheOrder.count > Self.maxAlbumTrackCacheEntries,
+              let evictedID = albumTrackCacheOrder.first
+        {
+            albumTrackCacheOrder.removeFirst()
+            albumTracksCache.removeValue(forKey: evictedID)
+        }
+    }
+
+    private func touchAlbumTrackCacheEntry(_ albumID: String) {
+        albumTrackCacheOrder.removeAll { $0 == albumID }
+        albumTrackCacheOrder.append(albumID)
     }
 
     /// Loads artist profile and top tracks (`GET /artists/{id}` + `/top-tracks`).
@@ -555,7 +1025,7 @@ final class AppSession {
                 profile = try await self.api.fetchArtist(accessToken: token, id: artistID)
             } catch let apiErr as SpotifyAPIError {
                 if case .http(401, _) = apiErr { throw apiErr }
-                notes.append(self.artistCatalogFailureMessage(apiErr, context: "artist profile"))
+                notes.append(self.catalogFailureMessage(apiErr, context: "artist profile"))
             } catch {
                 notes.append(error.localizedDescription)
             }
@@ -568,7 +1038,7 @@ final class AppSession {
                 )
             } catch let apiErr as SpotifyAPIError {
                 if case .http(401, _) = apiErr { throw apiErr }
-                notes.append(self.artistCatalogFailureMessage(apiErr, context: "top tracks"))
+                notes.append(self.catalogFailureMessage(apiErr, context: "top tracks"))
             } catch {
                 notes.append(error.localizedDescription)
             }
@@ -588,21 +1058,6 @@ final class AppSession {
                 return try await fetchParts(refreshed.accessToken)
             }
             throw apiErr
-        }
-    }
-
-    private func artistCatalogFailureMessage(_ error: SpotifyAPIError, context: String) -> String {
-        switch error {
-        case let .http(403, body):
-            let detail = body.flatMap { $0.isEmpty ? nil : " \($0)" } ?? ""
-            return """
-            Spotify returned Forbidden (403) for \(context).\(detail)
-            This can happen when the Web API blocks an endpoint for your app (quota / development mode — see https://developer.spotify.com/documentation/web-api/concepts/quota-modes). Try signing out and signing in again, or request extended API access if you need full catalog data. You can still use Play for this artist.
-            """
-        case .http:
-            return "\(context): \(error.localizedDescription)"
-        case .decoding:
-            return "\(context): \(error.localizedDescription)"
         }
     }
 
@@ -718,13 +1173,13 @@ final class AppSession {
             if let track = pending {
                 do {
                     let token = try await validAccessToken()
-                    try await api.addItemsToPlaylist(
+                    _ = try await api.addItemsToPlaylist(
                         accessToken: token,
                         playlistID: finalPl.id,
                         trackURIs: ["spotify:track:\(track.id)"]
                     )
                     if let full = try? await api.fetchTrack(accessToken: token, id: track.id) {
-                        playlistTracksCache[finalPl.id] = [full]
+                        cachePlaylistTracks([full], for: finalPl.id)
                     }
                 } catch {
                     let msg = "Couldn’t add the track to the new playlist: \(error.localizedDescription)"
@@ -816,7 +1271,7 @@ final class AppSession {
             if let index = playlists.firstIndex(where: { $0.id == playlistID }) {
                 playlists[index] = playlists[index].replacingMetadata(name: trimmedName)
             }
-            if var meta = playlistMetadataByID[playlistID] {
+            if let meta = playlistMetadataByID[playlistID] {
                 playlistMetadataByID[playlistID] = meta.replacingMetadata(name: trimmedName)
             }
             return true
@@ -843,6 +1298,7 @@ final class AppSession {
             try await deletePlaylistWithRetry(id: playlistID)
             playlists.removeAll { $0.id == playlistID }
             playlistTracksCache[playlistID] = nil
+            playlistTrackCacheOrder.removeAll { $0 == playlistID }
             playlistMetadataByID.removeValue(forKey: playlistID)
             if case .playlist(let selectedID) = selectedLibrary, selectedID == playlistID {
                 selectedLibrary = .home
@@ -905,7 +1361,7 @@ final class AppSession {
 
         do {
             let token = try await validAccessToken()
-            try await api.addItemsToPlaylist(
+            _ = try await api.addItemsToPlaylist(
                 accessToken: token,
                 playlistID: playlistID,
                 trackURIs: ["spotify:track:\(trackID)"]
@@ -914,7 +1370,7 @@ final class AppSession {
             if var existing = playlistTracksCache[playlistID] {
                 if !existing.contains(where: { $0.id == trackID }) {
                     existing.append(fullTrack)
-                    playlistTracksCache[playlistID] = existing
+                    cachePlaylistTracks(existing, for: playlistID)
                 }
             }
         } catch let apiErr as SpotifyAPIError {
@@ -923,7 +1379,7 @@ final class AppSession {
                     let refreshed = try await authService.refreshSession(session)
                     try SpotifyTokenStore.save(refreshed)
                     storedSession = refreshed
-                    try await api.addItemsToPlaylist(
+                    _ = try await api.addItemsToPlaylist(
                         accessToken: refreshed.accessToken,
                         playlistID: playlistID,
                         trackURIs: ["spotify:track:\(trackID)"]
@@ -932,7 +1388,7 @@ final class AppSession {
                     if var existing = playlistTracksCache[playlistID] {
                         if !existing.contains(where: { $0.id == trackID }) {
                             existing.append(fullTrack)
-                            playlistTracksCache[playlistID] = existing
+                            cachePlaylistTracks(existing, for: playlistID)
                         }
                     }
                 } catch let retryErr as SpotifyAPIError {

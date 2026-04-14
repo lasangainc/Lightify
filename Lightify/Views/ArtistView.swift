@@ -53,7 +53,10 @@ struct ArtistView: View {
                             TrackRow(
                                 track: track,
                                 onPlay: { playback.playTrack(id: track.id) },
-                                playDisabled: !playback.isWebPlayerReady
+                                playDisabled: !playback.isWebPlayerReady,
+                                onAlbumArtTap: {
+                                    Task { await appSession.openAlbum(from: track) }
+                                }
                             )
                             Divider()
                         }
@@ -74,23 +77,11 @@ struct ArtistView: View {
     private var hero: some View {
         VStack(alignment: .leading, spacing: 14) {
             Group {
-                if let url = profile?.largestImageURL {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
-                            Circle().fill(.quaternary)
-                        case let .success(image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure:
-                            Circle().fill(.quaternary)
-                                .overlay { Image(systemName: "person.fill").foregroundStyle(.secondary) }
-                        @unknown default:
-                            Circle().fill(.quaternary)
-                        }
-                    }
-                } else {
+                RemoteArtworkImage(url: profile?.largestImageURL, maxPixelSize: 512) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
                     Circle()
                         .fill(.quaternary)
                         .overlay {

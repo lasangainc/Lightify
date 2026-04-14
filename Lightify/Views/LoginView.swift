@@ -3,6 +3,7 @@
 //  Lightify
 //
 
+import AppKit
 import SwiftUI
 
 struct LoginView: View {
@@ -11,14 +12,21 @@ struct LoginView: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: "music.note.list")
-                .font(.system(size: 56))
-                .foregroundStyle(.tint)
+            Group {
+                if let icon = NSApp.applicationIconImage {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                }
+            }
+            .frame(width: 80, height: 80)
+            .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
 
             Text("Lightify")
                 .font(.largeTitle.weight(.semibold))
 
-            Text("Connect your Spotify account for your library and liked songs. Playback streams in-app with Spotify Web Playback (Premium).")
+            Text("Sign in to start using the best Spotify Client for Mac. Requires Spotify Premium.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -50,12 +58,6 @@ struct LoginView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(isSigningIn)
-
-            Text("Set your Client ID in `SpotifyConfig.swift` and add redirect URI `lightify://oauth-callback` in the Spotify Developer Dashboard.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 480)
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

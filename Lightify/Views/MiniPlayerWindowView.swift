@@ -18,6 +18,8 @@ struct MiniPlayerWindowView: View {
     @State private var sampledTint: (color: Color, gradientEnd: Color, luminance: CGFloat)?
 
     private static let symbolReplace = Animation.smooth(duration: 0.23)
+    private static let playPauseSymbolReplace = Animation.spring(response: 0.16, dampingFraction: 0.52)
+    private static let artworkScaleAnimation = Animation.smooth(duration: 0.26)
 
     private var useLightForeground: Bool {
         guard let l = sampledTint?.luminance else { return false }
@@ -30,6 +32,12 @@ struct MiniPlayerWindowView: View {
 
     private var controlTint: Color {
         useLightForeground ? .white : Color("AccentColor")
+    }
+
+    /// Full size while playing or when idle; slightly smaller when a track is loaded but paused.
+    private var artworkDisplayScale: CGFloat {
+        guard let np = playback.nowPlaying else { return 1.0 }
+        return np.isPlaying ? 1.0 : 0.92
     }
 
     var body: some View {
@@ -118,6 +126,8 @@ struct MiniPlayerWindowView: View {
                 .frame(width: 220, height: 220)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
+                .scaleEffect(artworkDisplayScale)
+                .animation(Self.artworkScaleAnimation, value: artworkDisplayScale)
         }
         .buttonStyle(.plain)
         .disabled(playback.nowPlaying == nil)
@@ -209,8 +219,9 @@ struct MiniPlayerWindowView: View {
                 Image(systemName: (playback.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
                     .font(.system(size: 28, weight: .semibold))
                     .frame(width: 36, height: 36)
-                    .contentTransition(.symbolEffect(.replace))
-                    .animation(Self.symbolReplace, value: playback.nowPlaying?.isPlaying ?? false)
+                    .symbolEffect(.bounce, value: playback.nowPlaying?.isPlaying ?? false)
+                    .contentTransition(.symbolEffect(.replace.offUp.byLayer, options: .nonRepeating))
+                    .animation(Self.playPauseSymbolReplace, value: playback.nowPlaying?.isPlaying ?? false)
             }
             .buttonStyle(.plain)
             .help((playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play")

@@ -10,57 +10,119 @@ struct LoginView: View {
     @Environment(AppSession.self) private var appSession
     @State private var isSigningIn = false
 
+    private let accent = Color("AccentColor")
+
     var body: some View {
-        VStack(spacing: 24) {
-            Group {
-                if let icon = NSApp.applicationIconImage {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: .fit)
+        VStack(spacing: 0) {
+            VStack(spacing: 22) {
+                iconBlock
+
+                VStack(spacing: 8) {
+                    Text("Sign in")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.primary)
+
+                    Text("Sign in to start using the best Spotify Client for Mac.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("Requires Spotify Premium.")
+                        .font(.subheadline)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
+
+                if let err = appSession.authError {
+                    Text(err)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(.red.opacity(0.12))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(.red.opacity(0.22), lineWidth: 1)
+                        )
                 }
             }
-            .frame(width: 80, height: 80)
-            .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+            .padding(.horizontal, 28)
+            .padding(.top, 32)
+            .padding(.bottom, 24)
 
-            Text("Lightify")
-                .font(.largeTitle.weight(.semibold))
+            Divider()
+                .opacity(0.35)
 
-            Text("Sign in to start using the best Spotify Client for Mac. Requires Spotify Premium.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-
-            if let err = appSession.authError {
-                Text(err)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 420)
-            }
-
-            Button {
-                Task {
-                    isSigningIn = true
-                    await appSession.signIn()
-                    isSigningIn = false
-                }
-            } label: {
+            HStack {
+                Spacer()
                 if isSigningIn {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: 120)
+                        .frame(height: 24)
                 } else {
-                    Text("Log in with Spotify")
-                        .frame(minWidth: 200)
+                    Button {
+                        Task {
+                            isSigningIn = true
+                            await appSession.signIn()
+                            isSigningIn = false
+                        }
+                    } label: {
+                        Text("Continue with Spotify")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(accent)
+                    .controlSize(.small)
                 }
+                Spacer()
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(isSigningIn)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
         }
-        .padding(40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: 400)
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThickMaterial)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                accent.opacity(0.07),
+                                accent.opacity(0.02),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.primary.opacity(0.06), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 28, y: 14)
+        .shadow(color: accent.opacity(0.12), radius: 40, y: 8)
+    }
+
+    @ViewBuilder
+    private var iconBlock: some View {
+        Group {
+            if let icon = NSApp.applicationIconImage {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            }
+        }
+        .frame(width: 80, height: 80)
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
     }
 }
 

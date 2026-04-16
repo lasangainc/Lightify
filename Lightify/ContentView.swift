@@ -3,6 +3,7 @@
 //  Lightify
 //
 
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -17,7 +18,12 @@ struct ContentView: View {
                     .controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .needsLogin:
-                LoginView()
+                loginPhaseBackdrop
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .sheet(isPresented: loginSheetPresented) {
+                        LoginView()
+                            .interactiveDismissDisabled()
+                    }
             case .loadingContent:
                 VStack(spacing: 16) {
                     ProgressView()
@@ -47,6 +53,38 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+
+    private var loginSheetPresented: Binding<Bool> {
+        Binding(
+            get: { appSession.phase == .needsLogin },
+            set: { _ in }
+        )
+    }
+
+    private var loginPhaseBackdrop: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+            RadialGradient(
+                colors: [
+                    Color("AccentColor").opacity(0.14),
+                    Color("AccentColor").opacity(0.04),
+                    .clear,
+                ],
+                center: .init(x: 0.5, y: 0.35),
+                startRadius: 40,
+                endRadius: 420
+            )
+            LinearGradient(
+                colors: [
+                    Color(nsColor: .windowBackgroundColor).opacity(0),
+                    Color(nsColor: .windowBackgroundColor).opacity(0.85),
+                ],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
+        .ignoresSafeArea()
     }
 }
 

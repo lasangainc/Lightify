@@ -11,6 +11,7 @@ struct DashboardView: View {
     @State private var isRenamePlaylistAlertPresented = false
     @State private var renamePlaylistDraft = ""
     @State private var deletePlaylistTarget: SpotifyPlaylistItem?
+    @State private var heroTint: (color: Color, gradientEnd: Color, luminance: CGFloat)?
 
     var body: some View {
         NavigationSplitView {
@@ -95,6 +96,13 @@ struct DashboardView: View {
                             }
                         }
                         .padding(20)
+                    }
+                    .background(alignment: .top) {
+                        libraryHeroGradient
+                    }
+                    .animation(.easeInOut(duration: 0.35), value: heroTint?.color)
+                    .task(id: heroGradientTaskKey) {
+                        await refreshHeroTint()
                     }
                 }
             }
@@ -1079,6 +1087,56 @@ struct DashboardView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var libraryHasHeroGradient: Bool {
+        switch appSession.selectedLibrary {
+        case .likedSongs, .playlist, .album:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var heroGradientTaskKey: String {
+        guard libraryHasHeroGradient else { return "none" }
+        return libraryCoverImageURL?.absoluteString ?? "placeholder"
+    }
+
+    @ViewBuilder
+    private var libraryHeroGradient: some View {
+        if libraryHasHeroGradient, let tint = heroTint {
+            LinearGradient(
+                colors: [
+                    tint.color.opacity(0.72),
+                    tint.gradientEnd.opacity(0.32),
+                    .clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 440)
+            .frame(maxWidth: .infinity)
+            .blur(radius: 32)
+            .opacity(0.95)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+            .ignoresSafeArea(edges: .top)
+        }
+    }
+
+    @MainActor
+    private func refreshHeroTint() async {
+        guard libraryHasHeroGradient, let url = libraryCoverImageURL else {
+            heroTint = nil
+            return
+        }
+        do {
+            let image = try await ArtworkPipeline.shared.image(for: url, maxPixelSize: 96)
+            heroTint = ArtworkColorSampler.tint(from: image)
+        } catch {
+            heroTint = nil
         }
     }
 

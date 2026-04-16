@@ -20,6 +20,9 @@ struct NowPlayingControls: View {
 
     private static let islandSymbolReplace = Animation.smooth(duration: 0.23)
 
+    /// Drives the layered replace transition when play ↔ pause changes.
+    private static let playPauseSymbolReplace = Animation.spring(response: 0.16, dampingFraction: 0.52)
+
     var body: some View {
         HStack(spacing: 0) {
             if isCollapsed {
@@ -81,7 +84,8 @@ struct NowPlayingControls: View {
                 Image(systemName: (playback.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
                     .font(.system(size: 20, weight: .semibold))
                     .frame(width: 28, height: 28)
-                    .islandSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false, animation: Self.islandSymbolReplace)
+                    .symbolEffect(.bounce, value: playback.nowPlaying?.isPlaying ?? false)
+                    .islandPlayPauseSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false, animation: Self.playPauseSymbolReplace)
             }
             .buttonStyle(.plain)
             .help((playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play")
@@ -168,7 +172,8 @@ struct NowPlayingControls: View {
                     Image(systemName: (playback.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
                         .font(.system(size: 22, weight: .semibold))
                         .frame(width: 28, height: 28)
-                        .islandSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false, animation: Self.islandSymbolReplace)
+                        .symbolEffect(.bounce, value: playback.nowPlaying?.isPlaying ?? false)
+                        .islandPlayPauseSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false, animation: Self.playPauseSymbolReplace)
                 }
                 .buttonStyle(.plain)
                 .help((playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play")
@@ -402,6 +407,12 @@ private extension View {
     func islandSymbolReplace<V: Equatable>(value: V, animation: Animation) -> some View {
         self
             .contentTransition(.symbolEffect(.replace))
+            .animation(animation, value: value)
+    }
+
+    func islandPlayPauseSymbolReplace<V: Equatable>(value: V, animation: Animation) -> some View {
+        self
+            .contentTransition(.symbolEffect(.replace.offUp.byLayer, options: .nonRepeating))
             .animation(animation, value: value)
     }
 }

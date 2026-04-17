@@ -34,6 +34,16 @@ final class PlaybackViewModel {
 
     var nowPlaying: NowPlaying?
     var playerError: String?
+    /// Shown as its own alert (title + message) when the SDK has nothing to play.
+    private(set) var noSongQueuedPlaybackAlert: (title: String, message: String)?
+
+    /// Clears playback-facing alerts (used when the user dismisses the combined playback alert).
+    func acknowledgePlaybackIssueAlerts() {
+        noSongQueuedPlaybackAlert = nil
+        playerError = nil
+        autoplayBlocked = false
+        queueError = nil
+    }
     var autoplayBlocked: Bool = false
     var playbackVolume: Double = 0.85
     private(set) var webPlayerDeviceId: String?
@@ -82,8 +92,15 @@ final class PlaybackViewModel {
         do {
             try bridge.loadPlayerPage()
         } catch {
+            noSongQueuedPlaybackAlert = nil
             playerError = error.localizedDescription
         }
+    }
+
+    /// Clears single-line `playerError` and the no-song alert before a new user-driven playback attempt or when the player becomes ready.
+    private func clearPlayerFacingErrors() {
+        playerError = nil
+        noSongQueuedPlaybackAlert = nil
     }
 
     func teardownWebPlayback() {
@@ -94,6 +111,9 @@ final class PlaybackViewModel {
         isWebPlayerReady = false
         webPlayerDeviceId = nil
         nowPlaying = nil
+        playerError = nil
+        noSongQueuedPlaybackAlert = nil
+        autoplayBlocked = false
         playbackVolume = 0.85
         playbackQueue = []
         queueError = nil
@@ -116,7 +136,7 @@ final class PlaybackViewModel {
     }
 
     private func playTrackAsync(id: String) async {
-        playerError = nil
+        clearPlayerFacingErrors()
         autoplayBlocked = false
         guard let appSession else {
             playerError = AppSessionError.notSignedIn.localizedDescription
@@ -141,7 +161,7 @@ final class PlaybackViewModel {
     }
 
     private func playContextURIAsync(_ uri: String) async {
-        playerError = nil
+        clearPlayerFacingErrors()
         autoplayBlocked = false
         guard let appSession else {
             playerError = AppSessionError.notSignedIn.localizedDescription
@@ -175,7 +195,7 @@ final class PlaybackViewModel {
 
     private func playTrackListAsync(trackIDs: [String]) async {
         guard !trackIDs.isEmpty else { return }
-        playerError = nil
+        clearPlayerFacingErrors()
         autoplayBlocked = false
         guard let appSession else {
             playerError = AppSessionError.notSignedIn.localizedDescription
@@ -254,6 +274,19 @@ final class PlaybackViewModel {
         }
     }
 
+    private static let noSongQueuedAlertTitle = "No song to play!"
+    private static let noSongQueuedAlertMessage = "Please select a song"
+
+    /// Spotify’s Web Playback SDK uses several wordings (e.g. “…Action” vs “…operation; no list was loaded.”).
+    private static func shouldPresentNoSongQueuedAlert(forPlaybackSDKMessage message: String) -> Bool {
+        let lower = message.lowercased()
+        if lower.contains("no list was loaded") { return true }
+        if lower.contains("cannot perform") || lower.contains("can not perform") {
+            return lower.contains("action") || lower.contains("operation")
+        }
+        return false
+    }
+
     private func handleBridgeEvent(_ event: SpotifyWebPlaybackBridge.BridgeEvent) {
         switch event {
         case .sdkReady:
@@ -262,12 +295,13 @@ final class PlaybackViewModel {
             bridge.startPlayer()
         case let .connectResult(success):
             if !success {
+                noSongQueuedPlaybackAlert = nil
                 playerError = "Could not connect Spotify Web Playback."
             }
         case let .ready(deviceId):
             webPlayerDeviceId = deviceId
             isWebPlayerReady = true
-            playerError = nil
+            clearPlayerFacingErrors()
         case .notReady:
             isWebPlayerReady = false
         case let .playerStateChanged(payload):
@@ -315,12 +349,22 @@ final class PlaybackViewModel {
             }
         case .autoplayFailed:
             autoplayBlocked = true
+            noSongQueuedPlaybackAlert = nil
             playerError = "Playback was blocked by the browser. Try play/pause or pick a track again."
         case let .initializationError(msg),
-             let .authenticationError(msg),
-             let .playbackError(msg):
+             let .authenticationError(msg):
+            noSongQueuedPlaybackAlert = nil
             playerError = msg
+        case let .playbackError(msg):
+            if Self.shouldPresentNoSongQueuedAlert(forPlaybackSDKMessage: msg) {
+                noSongQueuedPlaybackAlert = (Self.noSongQueuedAlertTitle, Self.noSongQueuedAlertMessage)
+                playerError = nil
+            } else {
+                noSongQueuedPlaybackAlert = nil
+                playerError = msg
+            }
         case let .accountError(msg):
+            noSongQueuedPlaybackAlert = nil
             playerError = "Spotify Premium is required for Web Playback: \(msg)"
         case .log:
             break

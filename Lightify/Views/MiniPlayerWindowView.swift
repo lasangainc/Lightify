@@ -47,13 +47,12 @@ struct MiniPlayerWindowView: View {
 
             VStack(spacing: 14) {
                 artworkSection
-                statusSection
 
                 GlassEffectContainer(spacing: 18) {
                     VStack(spacing: 14) {
                         trackMetadataBubble
 
-                        if let np = playback.nowPlaying, !playback.autoplayBlocked, playback.playerError == nil {
+                        if let np = playback.nowPlaying, !playback.autoplayBlocked {
                             PlaybackScrubber(
                                 positionMs: np.positionMs,
                                 durationMs: np.durationMs,
@@ -84,6 +83,7 @@ struct MiniPlayerWindowView: View {
         .task(id: playback.nowPlaying?.artworkURL?.absoluteString) {
             await refreshArtworkTint()
         }
+        .playbackIssueAlerts()
     }
 
     private var artworkWindowBackground: some View {
@@ -183,21 +183,6 @@ struct MiniPlayerWindowView: View {
         .padding(.vertical, 12)
         .padding(.horizontal, 22)
         .glassEffect(.regular, in: Capsule())
-    }
-
-    @ViewBuilder
-    private var statusSection: some View {
-        if playback.autoplayBlocked {
-            Text("Autoplay blocked — tap play or pick a track")
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .multilineTextAlignment(.center)
-        } else if let err = playback.playerError {
-            Text(err)
-                .font(.caption)
-                .foregroundStyle(.red)
-                .multilineTextAlignment(.center)
-        }
     }
 
     private var transportBubble: some View {

@@ -37,6 +37,13 @@ struct DashboardView: View {
         } message: {
             Text(appSession.playlistActionError ?? "")
         }
+        .alert("Error", isPresented: loadErrorAlertBinding) {
+            Button("OK") {
+                appSession.loadError = nil
+            }
+        } message: {
+            Text(appSession.loadError ?? "")
+        }
         .alert("Rename Playlist", isPresented: renamePlaylistAlertBinding) {
             TextField("Name", text: renamePlaylistDraftBinding)
             Button("Cancel", role: .cancel) {
@@ -93,12 +100,6 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(.blue.opacity(0.12))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-
-                    if let loadErr = appSession.loadError {
-                        Text(loadErr)
-                            .foregroundStyle(.red)
-                            .font(.callout)
                     }
 
                     switch appSession.selectedLibrary {
@@ -224,6 +225,15 @@ struct DashboardView: View {
             get: { appSession.playlistActionError != nil && !appSession.isNewPlaylistSheetPresented },
             set: { newValue in
                 if !newValue { appSession.playlistActionError = nil }
+            }
+        )
+    }
+
+    private var loadErrorAlertBinding: Binding<Bool> {
+        Binding(
+            get: { appSession.loadError != nil },
+            set: { newValue in
+                if !newValue { appSession.loadError = nil }
             }
         )
     }

@@ -41,6 +41,7 @@ struct NowPlayingControls: View {
                     ))
             }
         }
+        .playbackIssueAlerts()
     }
 
     private var expandedIsland: some View {
@@ -195,19 +196,7 @@ struct NowPlayingControls: View {
 
     private var centerInfo: some View {
         VStack(spacing: 2) {
-            if playback.autoplayBlocked {
-                Text("Autoplay blocked — tap play or pick a track")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-            } else if let err = playback.playerError {
-                Text(err)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-            } else if let np = playback.nowPlaying {
+            if let np = playback.nowPlaying {
                 VStack(spacing: 2) {
                     Text(np.trackName)
                         .font(.subheadline.weight(.semibold))
@@ -228,7 +217,7 @@ struct NowPlayingControls: View {
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .overlay(alignment: .bottom) {
-            if let np = playback.nowPlaying, !playback.autoplayBlocked, playback.playerError == nil {
+            if let np = playback.nowPlaying, !playback.autoplayBlocked {
                 PlaybackScrubber(
                     positionMs: np.positionMs,
                     durationMs: np.durationMs,
@@ -304,11 +293,13 @@ struct NowPlayingControls: View {
                 ProgressView()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-            } else if let err = playback.queueError {
-                Text(err)
+            } else if playback.queueError != nil {
+                Text("Couldn’t load the queue.")
                     .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 4)
             } else if playback.playbackQueue.isEmpty {
                 Text("Nothing queued up next")
                     .font(.caption)

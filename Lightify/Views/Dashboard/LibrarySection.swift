@@ -3,7 +3,32 @@
 //  Lightify
 //
 
+import AppKit
 import SwiftUI
+
+// MARK: - Hero tint (light mode)
+
+/// Full HSB saturation while keeping hue and brightness (used for light-mode hero washes).
+private func heroColorWithMaxSaturation(_ color: Color) -> Color {
+    let ns = NSColor(color)
+    let rgb = ns.usingColorSpace(.deviceRGB) ?? ns
+    var h: CGFloat = 0
+    var s: CGFloat = 0
+    var b: CGFloat = 0
+    var a: CGFloat = 0
+    rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+    return Color(nsColor: NSColor(calibratedHue: h, saturation: 1, brightness: b, alpha: a))
+}
+
+// MARK: - Hero layout (cover + background glow alignment)
+
+private enum LibraryHeroLayout {
+    static let coverSide: CGFloat = 140
+    static let contentPadding: CGFloat = 20
+    /// Center of the square cover art in dashboard content coordinates (matches `ScrollView` padding + cover frame).
+    static var coverCenterX: CGFloat { contentPadding + coverSide / 2 }
+    static var coverCenterY: CGFloat { contentPadding + coverSide / 2 }
+}
 
 // MARK: - Hero header
 
@@ -193,20 +218,33 @@ struct LibraryHeroHeader: View {
         }
     }
 
-    private var selectedPlaylistIsActiveAndPlaying: Bool {
+    /// Current library selection matches active playback (playing **or** paused). Used so the hero pill resumes instead of restarting.
+    private var selectedPlaylistMatchesPlayback: Bool {
         guard case .playlist(let id) = appSession.selectedLibrary else { return false }
-        guard let np = playback.nowPlaying, np.isPlaying else { return false }
+        guard let np = playback.nowPlaying else { return false }
         return np.contextURI == "spotify:playlist:\(id)"
     }
 
-    private var selectedAlbumIsActiveAndPlaying: Bool {
+    private var selectedAlbumMatchesPlayback: Bool {
         guard case .album(let id, _) = appSession.selectedLibrary else { return false }
-        guard let np = playback.nowPlaying, np.isPlaying else { return false }
+        guard let np = playback.nowPlaying else { return false }
         return np.contextURI == "spotify:album:\(id)"
     }
 
-    private var libraryContextIsActiveAndPlaying: Bool {
-        selectedPlaylistIsActiveAndPlaying || selectedAlbumIsActiveAndPlaying
+    /// Liked Songs has no stable Spotify context URI; treat a liked track as “this page” when it is the current track.
+    private var likedSongsSelectionMatchesPlayback: Bool {
+        guard case .likedSongs = appSession.selectedLibrary else { return false }
+        guard let np = playback.nowPlaying, let uri = np.uri else { return false }
+        let trackID = uri.split(separator: ":").last.map(String.init) ?? ""
+        return appSession.likedTrackIDs.contains(trackID)
+    }
+
+    private var libraryContextMatchesPlayback: Bool {
+        selectedPlaylistMatchesPlayback || selectedAlbumMatchesPlayback || likedSongsSelectionMatchesPlayback
+    }
+
+    private var libraryHeroShowsPause: Bool {
+        libraryContextMatchesPlayback && (playback.nowPlaying?.isPlaying ?? false)
     }
 
     /// True when a song from the user's liked tracks is currently playing.
@@ -219,15 +257,15 @@ struct LibraryHeroHeader: View {
 
     private var libraryPlayPillButton: some View {
         Button {
-            if libraryContextIsActiveAndPlaying {
+            if libraryContextMatchesPlayback {
                 playback.playPause()
             } else {
                 playLibrarySelection()
             }
         } label: {
             Label(
-                libraryContextIsActiveAndPlaying ? "Pause" : "Play",
-                systemImage: libraryContextIsActiveAndPlaying ? "pause.fill" : "play.fill"
+                libraryHeroShowsPause ? "Pause" : "Play",
+                systemImage: libraryHeroShowsPause ? "pause.fill" : "play.fill"
             )
                 .font(.subheadline.weight(.semibold))
                 .labelStyle(.titleAndIcon)
@@ -315,7 +353,7 @@ struct LibraryHeroHeader: View {
     }
 
     private var libraryCoverHero: some View {
-        let side: CGFloat = 140
+        let side = LibraryHeroLayout.coverSide
         return Group {
             RemoteArtworkImage(url: libraryCoverImageURL, maxPixelSize: side * 2) { image in
                 image
@@ -448,13 +486,6 @@ struct AlbumTracksSection: View {
         VStack(alignment: .leading, spacing: 16) {
             LibraryHeroHeader(onRenameTapped: onRenameTapped, onDeleteTapped: onDeleteTapped)
 
-            if let warning = appSession.albumCatalogWarning {
-                Text(warning)
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
             if appSession.tracksForSelectedLibrary.isEmpty, !appSession.isLoadingAlbumTracks, appSession.loadError == nil {
                 Text("No tracks on this album.")
                     .font(.subheadline)
@@ -473,6 +504,20 @@ struct AlbumTracksSection: View {
                 }
             }
         }
+        .alert("Album", isPresented: albumCatalogWarningAlertBinding) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(appSession.albumCatalogWarning ?? "")
+        }
+    }
+
+    private var albumCatalogWarningAlertBinding: Binding<Bool> {
+        Binding(
+            get: { appSession.albumCatalogWarning != nil },
+            set: { newValue in
+                if !newValue { appSession.acknowledgeAlbumCatalogWarning() }
+            }
+        )
     }
 }
 
@@ -504,17 +549,39 @@ struct LibraryHeroGradient: View {
     @Environment(\.colorScheme) private var colorScheme
     @Binding var heroPalettes: [ArtworkPalette]
 
+    /// Light mode + playlist/album: soft glow anchored to cover art only (not Liked Songs).
+    private var useCoverAnchoredLightGlow: Bool {
+        colorScheme == .light && libraryUsesSquareCoverHeroGradient
+    }
+
+    private var libraryUsesSquareCoverHeroGradient: Bool {
+        switch appSession.selectedLibrary {
+        case .playlist, .album:
+            return true
+        default:
+            return false
+        }
+    }
+
     var body: some View {
         ZStack {
             if libraryHasHeroGradient, !heroPalettes.isEmpty {
-                heroGradientContent
-                    .frame(height: 440)
-                    .frame(maxWidth: .infinity)
-                    .blur(radius: 32)
-                    .opacity(0.95)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-                    .ignoresSafeArea(edges: .top)
+                Group {
+                    if useCoverAnchoredLightGlow {
+                        heroGradientContent
+                            .frame(height: 420)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    } else {
+                        heroGradientContent
+                            .frame(height: 440)
+                            .frame(maxWidth: .infinity)
+                            .blur(radius: 32)
+                            .opacity(0.95)
+                    }
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
+                .ignoresSafeArea(edges: .top)
             }
         }
         .animation(.easeInOut(duration: 0.35), value: heroPalettes.count)
@@ -543,7 +610,9 @@ struct LibraryHeroGradient: View {
 
     @ViewBuilder
     private var heroGradientContent: some View {
-        if case .likedSongs = appSession.selectedLibrary, heroPalettes.count > 1 {
+        if useCoverAnchoredLightGlow, let palette = heroPalettes.first {
+            coverAnchoredLightGlow(for: palette)
+        } else if case .likedSongs = appSession.selectedLibrary, heroPalettes.count > 1 {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 ZStack {
@@ -555,6 +624,53 @@ struct LibraryHeroGradient: View {
             }
         } else if let palette = heroPalettes.first {
             heroGradientLayer(for: palette)
+        }
+    }
+
+    /// Wide, soft radial wash centered on the playlist/album artwork (light mode only).
+    private func coverAnchoredLightGlow(for palette: ArtworkPalette) -> some View {
+        let stop = heroTintStop(for: palette)
+        return GeometryReader { geo in
+            let cx = LibraryHeroLayout.coverCenterX
+            let cy = LibraryHeroLayout.coverCenterY
+            let spreadW = max(geo.size.width * 1.12, 540)
+            let spreadH: CGFloat = 400
+
+            ZStack {
+                Ellipse()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                stop.color.opacity(0.42),
+                                stop.gradientEnd.opacity(0.16),
+                                Color.clear
+                            ],
+                            center: .center,
+                            startRadius: 2,
+                            endRadius: max(spreadW, spreadH) * 0.46
+                        )
+                    )
+                    .frame(width: spreadW, height: spreadH)
+                    .blur(radius: 46)
+
+                Ellipse()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                stop.color.opacity(0.14),
+                                Color.clear
+                            ],
+                            center: .center,
+                            startRadius: 72,
+                            endRadius: max(spreadW, spreadH) * 0.62
+                        )
+                    )
+                    .frame(width: spreadW * 1.28, height: spreadH * 1.22)
+                    .blur(radius: 58)
+            }
+            .frame(width: spreadW * 1.28, height: spreadH * 1.22)
+            .position(x: cx, y: cy)
+            .frame(width: geo.size.width, height: 420, alignment: .topLeading)
         }
     }
 
@@ -572,10 +688,19 @@ struct LibraryHeroGradient: View {
     }
 
     private func heroTintStop(for palette: ArtworkPalette) -> (color: Color, gradientEnd: Color) {
+        let primary: Color
+        let end: Color
         if colorScheme == .light, let vibrant = palette.vibrant {
-            return (vibrant.color, palette.averageDark)
+            primary = vibrant.color
+            end = palette.averageDark
+        } else {
+            primary = palette.average
+            end = palette.averageDark
         }
-        return (palette.average, palette.averageDark)
+        if colorScheme == .light {
+            return (heroColorWithMaxSaturation(primary), heroColorWithMaxSaturation(end))
+        }
+        return (primary, end)
     }
 
     /// Returns the alpha for palette `index` at time `time`, cycling through all palettes
@@ -663,7 +788,7 @@ struct LibraryHeroGradient: View {
 /// Hero visual for the Liked Songs page: a small SF Symbol heart surrounded by
 /// seven liked-song covers orbiting on a tilted ellipse. Pressing and holding
 /// the heart "gravitates" the covers inward; releasing springs them back out.
-/// The heart only beats while a liked song is actively playing.
+/// The heart slowly breathes (scale in/out) while a liked song is playing.
 private struct LikedSongsHeartHero: View {
     let tracks: [SpotifyTrack]
     let isPlayingLikedSong: Bool
@@ -674,9 +799,9 @@ private struct LikedSongsHeartHero: View {
     @State private var pressFeedback: Int = 0
 
     private static let heroSide: CGFloat = 220
-    private static let heartSize: CGFloat = 64
+    private static let heartSize: CGFloat = 44
     private static let baseRadius: CGFloat = 88
-    private static let pulledScale: CGFloat = 0.38
+    private static let pulledScale: CGFloat = 0.74
     /// Varied cover sizes so the orbit feels more characterful than a wheel of clones.
     /// Cycled by index so any count of tracks gets a distinct rhythm.
     private static let coverSides: [CGFloat] = [56, 38, 50, 44, 58, 40, 48]
@@ -690,7 +815,13 @@ private struct LikedSongsHeartHero: View {
     var body: some View {
         ZStack {
             if orbitingTracks.isEmpty {
-                heartView
+                if isPlayingLikedSong && !reduceMotion {
+                    TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                        heartView(at: context.date)
+                    }
+                } else {
+                    heartView(at: nil)
+                }
             } else {
                 TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
@@ -711,7 +842,7 @@ private struct LikedSongsHeartHero: View {
                                 .zIndex(s)
                         }
 
-                        heartView
+                        heartView(at: context.date)
                             .zIndex(0)
                     }
                 }
@@ -739,28 +870,31 @@ private struct LikedSongsHeartHero: View {
             }
     }
 
-    private var heartView: some View {
-        let gradient = LinearGradient(
-            colors: [
-                Color.white.opacity(0.92),
-                Color(red: 0.96, green: 0.80, blue: 0.86).opacity(0.85)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+    private func heartView(at animationDate: Date?) -> some View {
+        let beatScale: CGFloat = {
+            guard isPlayingLikedSong && !reduceMotion, let animationDate else { return 1.0 }
+            return Self.breathingScale(at: animationDate)
+        }()
+        return heartImage(beatScale: beatScale)
+    }
+
+    /// Size-only slow breathe while playing (sine in/out, no opacity).
+    private static func breathingScale(at date: Date) -> CGFloat {
+        let period: TimeInterval = 2.75
+        let phase = 2 * Double.pi * date.timeIntervalSinceReferenceDate / period
+        return CGFloat(1.0 + 0.04 * sin(phase))
+    }
+
+    private func heartImage(beatScale: CGFloat) -> some View {
+        let pullScale: CGFloat = isPulled ? 0.98 : 1.0
 
         return Image(systemName: "heart.fill")
             .resizable()
             .scaledToFit()
             .frame(width: Self.heartSize, height: Self.heartSize)
-            .foregroundStyle(gradient)
-            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-            .symbolEffect(
-                .pulse.byLayer,
-                options: (isPlayingLikedSong && !reduceMotion) ? .repeating : .nonRepeating,
-                isActive: isPlayingLikedSong && !reduceMotion
-            )
-            .scaleEffect(isPulled ? 0.92 : 1.0)
+            .foregroundStyle(Color("AccentColor"))
+            .shadow(color: .black.opacity(0.3), radius: 7, y: 3)
+            .scaleEffect(beatScale * pullScale)
     }
 }
 

@@ -64,12 +64,6 @@ struct SearchSection: View {
                 }
             }
 
-            if let searchErr = appSession.searchError {
-                Text(searchErr)
-                    .foregroundStyle(.red)
-                    .font(.callout)
-            }
-
             let trimmedQuery = appSession.searchQueryText.trimmingCharacters(in: .whitespacesAndNewlines)
             let snap = appSession.catalogSearch
 
@@ -110,6 +104,20 @@ struct SearchSection: View {
                 }
             }
         }
+        .alert("Search", isPresented: searchErrorAlertBinding) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(appSession.searchError ?? "")
+        }
+    }
+
+    private var searchErrorAlertBinding: Binding<Bool> {
+        Binding(
+            get: { appSession.searchError != nil },
+            set: { newValue in
+                if !newValue { appSession.searchError = nil }
+            }
+        )
     }
 
     private var searchTabBinding: Binding<AppSession.SearchTab> {

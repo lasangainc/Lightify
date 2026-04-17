@@ -22,11 +22,6 @@ struct ArtistView: View {
         profile?.name ?? nameHint ?? "Artist"
     }
 
-    /// True when at least one catalog request succeeded (403 on the other call is a warning, not a total failure).
-    private var hasPartialCatalog: Bool {
-        profile != nil || !topTracks.isEmpty
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -39,11 +34,6 @@ struct ArtistView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-                }
-                if let loadError {
-                    Text(loadError)
-                        .foregroundStyle(hasPartialCatalog ? Color.orange : Color.red)
-                        .font(.callout)
                 }
                 if !topTracks.isEmpty {
                     Text("Popular")
@@ -72,6 +62,20 @@ struct ArtistView: View {
         .task(id: artistID) {
             await loadArtistContent()
         }
+        .alert("Artist", isPresented: artistLoadErrorAlertBinding) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(loadError ?? "")
+        }
+    }
+
+    private var artistLoadErrorAlertBinding: Binding<Bool> {
+        Binding(
+            get: { loadError != nil },
+            set: { newValue in
+                if !newValue { loadError = nil }
+            }
+        )
     }
 
     private var hero: some View {

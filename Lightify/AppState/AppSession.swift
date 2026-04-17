@@ -153,6 +153,10 @@ final class AppSession {
     /// Non-fatal notes when album header or track list partially fails (403 on one call, etc.).
     private(set) var albumCatalogWarning: String?
 
+    func acknowledgeAlbumCatalogWarning() {
+        albumCatalogWarning = nil
+    }
+
     /// Bound to the Search screen query field; not used for API until the user runs a search.
     var searchQueryText: String = ""
 
@@ -281,32 +285,17 @@ final class AppSession {
         }
         guard !track.id.isEmpty else { return }
         do {
-            let access = try await validAccessToken()
-            let full = try await api.fetchTrack(accessToken: access, id: track.id)
-            if let aid = full.albumId, !aid.isEmpty {
-                await openAlbum(id: aid, nameHint: full.album?.name, seedAlbum: full.album)
-            } else {
-                loadError = "Couldn’t find this album in Spotify’s catalog for this track."
-            }
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    let full = try await api.fetchTrack(accessToken: refreshed.accessToken, id: track.id)
-                    if let aid = full.albumId, !aid.isEmpty {
-                        await openAlbum(id: aid, nameHint: full.album?.name, seedAlbum: full.album)
-                    } else {
-                        loadError = "Couldn’t find this album in Spotify’s catalog for this track."
-                    }
-                } catch {
-                    loadError = "Session expired. Please sign in again."
-                    signOut()
+            try await withFreshAccessToken { token in
+                let full = try await self.api.fetchTrack(accessToken: token, id: track.id)
+                if let aid = full.albumId, !aid.isEmpty {
+                    await self.openAlbum(id: aid, nameHint: full.album?.name, seedAlbum: full.album)
+                } else {
+                    self.loadError = "Couldn’t find this album in Spotify’s catalog for this track."
                 }
-            } else {
-                loadError = apiErr.localizedDescription
             }
+        } catch AppSessionError.sessionExpired {
+            loadError = "Session expired. Please sign in again."
+            signOut()
         } catch {
             loadError = error.localizedDescription
         }
@@ -331,24 +320,13 @@ final class AppSession {
         let tid = String(uri.dropFirst("spotify:track:".count))
         guard !tid.isEmpty else { return }
         do {
-            let access = try await validAccessToken()
-            let track = try await api.fetchTrack(accessToken: access, id: tid)
-            await openAlbum(from: track)
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    let track = try await api.fetchTrack(accessToken: refreshed.accessToken, id: tid)
-                    await openAlbum(from: track)
-                } catch {
-                    loadError = "Session expired. Please sign in again."
-                    signOut()
-                }
-            } else {
-                loadError = apiErr.localizedDescription
+            try await withFreshAccessToken { token in
+                let track = try await self.api.fetchTrack(accessToken: token, id: tid)
+                await self.openAlbum(from: track)
             }
+        } catch AppSessionError.sessionExpired {
+            loadError = "Session expired. Please sign in again."
+            signOut()
         } catch {
             loadError = error.localizedDescription
         }
@@ -483,30 +461,19 @@ final class AppSession {
             defer { isLoadingPlaylistTracks = false }
 
             do {
-                let access = try await validAccessToken()
-                let tracks = try await api.fetchAllPlaylistTracks(
-                    accessToken: access,
-                    playlistID: playlistID,
-                    market: playlistMarketForAPI
-                )
-                cachePlaylistTracks(tracks, for: playlistID)
+                try await withFreshAccessToken { token in
+                    let tracks = try await self.api.fetchAllPlaylistTracks(
+                        accessToken: token,
+                        playlistID: playlistID,
+                        market: self.playlistMarketForAPI
+                    )
+                    self.cachePlaylistTracks(tracks, for: playlistID)
+                }
+            } catch AppSessionError.sessionExpired {
+                loadError = "Session expired. Please sign in again."
+                signOut()
             } catch let apiErr as SpotifyAPIError {
-                if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                    do {
-                        let refreshed = try await authService.refreshSession(session)
-                        try SpotifyTokenStore.save(refreshed)
-                        storedSession = refreshed
-                        let tracks = try await api.fetchAllPlaylistTracks(
-                            accessToken: refreshed.accessToken,
-                            playlistID: playlistID,
-                            market: playlistMarketForAPI
-                        )
-                        cachePlaylistTracks(tracks, for: playlistID)
-                    } catch {
-                        loadError = "Session expired. Please sign in again."
-                        signOut()
-                    }
-                } else if case let .http(code, _) = apiErr, code == 403 {
+                if case .http(403, _) = apiErr {
                     isPlaylistTrackListForbidden = true
                 } else {
                     loadError = apiErr.localizedDescription
@@ -581,30 +548,14 @@ final class AppSession {
         }
 
         do {
-            let access = try await validAccessToken()
-            let result = try await fetchParts(access)
+            let result = try await withFreshAccessToken { try await fetchParts($0) }
             albumCatalogWarning = result.2
             if result.1.isEmpty, result.0 == nil, albumMetadataByID[albumID] == nil {
                 loadError = albumCatalogWarning ?? "Couldn’t load this album."
             }
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    let result = try await fetchParts(refreshed.accessToken)
-                    albumCatalogWarning = result.2
-                    if result.1.isEmpty, result.0 == nil, albumMetadataByID[albumID] == nil {
-                        loadError = albumCatalogWarning ?? "Couldn’t load this album."
-                    }
-                } catch {
-                    loadError = "Session expired. Please sign in again."
-                    signOut()
-                }
-            } else {
-                loadError = apiErr.localizedDescription
-            }
+        } catch AppSessionError.sessionExpired {
+            loadError = "Session expired. Please sign in again."
+            signOut()
         } catch {
             loadError = error.localizedDescription
         }
@@ -614,25 +565,10 @@ final class AppSession {
     private func refreshAlbumMetadataIfNeeded(albumID: String) async {
         guard albumMetadataByID[albumID] == nil else { return }
         let market = playlistMarketForAPI
-        do {
-            let access = try await validAccessToken()
-            let meta = try await api.fetchAlbum(accessToken: access, albumID: albumID, market: market)
-            albumMetadataByID[albumID] = meta
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    let meta = try await api.fetchAlbum(
-                        accessToken: refreshed.accessToken,
-                        albumID: albumID,
-                        market: market
-                    )
-                    albumMetadataByID[albumID] = meta
-                } catch {}
-            }
-        } catch {}
+        try? await withFreshAccessToken { token in
+            let meta = try await self.api.fetchAlbum(accessToken: token, albumID: albumID, market: market)
+            self.albumMetadataByID[albumID] = meta
+        }
     }
 
     private func catalogFailureMessage(_ error: SpotifyAPIError, context: String) -> String {
@@ -652,28 +588,12 @@ final class AppSession {
 
     /// Loads `GET /playlists/{id}/images` when `/me/playlists` omitted artwork.
     private func fetchPlaylistCoverIfNeeded(playlistID: String, index: Int) async {
-        do {
-            let access = try await validAccessToken()
-            let imgs = try await api.fetchPlaylistCoverImages(accessToken: access, playlistID: playlistID)
+        try? await withFreshAccessToken { token in
+            let imgs = try await self.api.fetchPlaylistCoverImages(accessToken: token, playlistID: playlistID)
             guard !imgs.isEmpty else { return }
-            guard playlists.indices.contains(index), playlists[index].id == playlistID else { return }
-            playlists[index] = playlists[index].replacingImages(imgs)
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    let imgs = try await api.fetchPlaylistCoverImages(
-                        accessToken: refreshed.accessToken,
-                        playlistID: playlistID
-                    )
-                    guard !imgs.isEmpty else { return }
-                    guard playlists.indices.contains(index), playlists[index].id == playlistID else { return }
-                    playlists[index] = playlists[index].replacingImages(imgs)
-                } catch {}
-            }
-        } catch {}
+            guard self.playlists.indices.contains(index), self.playlists[index].id == playlistID else { return }
+            self.playlists[index] = self.playlists[index].replacingImages(imgs)
+        }
     }
 
     /// Runs a Spotify catalog search (tracks, artists, albums, playlists). Empty/whitespace query clears results and errors.
@@ -691,29 +611,13 @@ final class AppSession {
         defer { isSearching = false }
 
         do {
-            let access = try await validAccessToken()
-            catalogSearch = try await api.searchCatalog(accessToken: access, query: trimmed, limit: 10, offset: 0)
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    catalogSearch = try await api.searchCatalog(
-                        accessToken: refreshed.accessToken,
-                        query: trimmed,
-                        limit: 10,
-                        offset: 0
-                    )
-                } catch {
-                    searchError = "Session expired. Please sign in again."
-                    catalogSearch = SpotifyCatalogSearchSnapshot(tracks: [], artists: [], albums: [], playlists: [])
-                    signOut()
-                }
-            } else {
-                searchError = apiErr.localizedDescription
-                catalogSearch = SpotifyCatalogSearchSnapshot(tracks: [], artists: [], albums: [], playlists: [])
+            catalogSearch = try await withFreshAccessToken { token in
+                try await self.api.searchCatalog(accessToken: token, query: trimmed, limit: 10, offset: 0)
             }
+        } catch AppSessionError.sessionExpired {
+            searchError = "Session expired. Please sign in again."
+            catalogSearch = SpotifyCatalogSearchSnapshot(tracks: [], artists: [], albums: [], playlists: [])
+            signOut()
         } catch {
             searchError = error.localizedDescription
             catalogSearch = SpotifyCatalogSearchSnapshot(tracks: [], artists: [], albums: [], playlists: [])
@@ -857,51 +761,34 @@ final class AppSession {
         likingTrackIDs.insert(id)
         defer { likingTrackIDs.remove(id) }
 
-        do {
-            let token = try await validAccessToken()
-            if wasLiked {
-                try await api.removeSavedTracks(accessToken: token, trackIDs: [id])
-            } else {
-                try await api.saveTracks(accessToken: token, trackIDs: [id])
-            }
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    let token = refreshed.accessToken
-                    if wasLiked {
-                        try await api.removeSavedTracks(accessToken: token, trackIDs: [id])
-                    } else {
-                        try await api.saveTracks(accessToken: token, trackIDs: [id])
-                    }
-                } catch {
-                    likedSongs = snapshotSongs
-                    likedSongIDsInOrder = snapshotIDs
-                    likedTrackIDs = snapshotLikedIDs
-                    likedSongsTotalCount = snapshotTotal
-                    loadError = "Couldn’t update Liked Songs. Try again."
-                }
-            } else if case let .http(code, _) = apiErr, code == 403 {
-                likedSongs = snapshotSongs
-                likedSongIDsInOrder = snapshotIDs
-                likedTrackIDs = snapshotLikedIDs
-                likedSongsTotalCount = snapshotTotal
-                authError =
-                    "Spotify returned Forbidden (403). Sign out and sign in again so your account grants library save access (scope user-library-modify). Token refresh alone does not add new permissions."
-            } else {
-                likedSongs = snapshotSongs
-                likedSongIDsInOrder = snapshotIDs
-                likedTrackIDs = snapshotLikedIDs
-                likedSongsTotalCount = snapshotTotal
-                loadError = apiErr.localizedDescription
-            }
-        } catch {
+        let revertOptimisticState = { [self] in
             likedSongs = snapshotSongs
             likedSongIDsInOrder = snapshotIDs
             likedTrackIDs = snapshotLikedIDs
             likedSongsTotalCount = snapshotTotal
+        }
+
+        do {
+            try await withFreshAccessToken { token in
+                if wasLiked {
+                    try await self.api.removeSavedTracks(accessToken: token, trackIDs: [id])
+                } else {
+                    try await self.api.saveTracks(accessToken: token, trackIDs: [id])
+                }
+            }
+        } catch AppSessionError.sessionExpired {
+            revertOptimisticState()
+            loadError = "Couldn’t update Liked Songs. Try again."
+        } catch let apiErr as SpotifyAPIError {
+            revertOptimisticState()
+            if case .http(403, _) = apiErr {
+                authError =
+                    "Spotify returned Forbidden (403). Sign out and sign in again so your account grants library save access (scope user-library-modify). Token refresh alone does not add new permissions."
+            } else {
+                loadError = apiErr.localizedDescription
+            }
+        } catch {
+            revertOptimisticState()
             loadError = error.localizedDescription
         }
     }
@@ -923,32 +810,17 @@ final class AppSession {
         defer { isLoadingMoreLikedSongs = false }
 
         do {
-            let access = try await validAccessToken()
-            let page = try await api.fetchSavedTracksPage(
-                accessToken: access,
-                limit: Self.initialLikedSongsPageSize,
-                offset: offset
-            )
-            applyLikedSongsPage(page, replaceExisting: false)
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    let page = try await api.fetchSavedTracksPage(
-                        accessToken: refreshed.accessToken,
-                        limit: Self.initialLikedSongsPageSize,
-                        offset: offset
-                    )
-                    applyLikedSongsPage(page, replaceExisting: false)
-                } catch {
-                    loadError = "Session expired. Please sign in again."
-                    signOut()
-                }
-            } else {
-                loadError = apiErr.localizedDescription
+            let page = try await withFreshAccessToken { token in
+                try await self.api.fetchSavedTracksPage(
+                    accessToken: token,
+                    limit: Self.initialLikedSongsPageSize,
+                    offset: offset
+                )
             }
+            applyLikedSongsPage(page, replaceExisting: false)
+        } catch AppSessionError.sessionExpired {
+            loadError = "Session expired. Please sign in again."
+            signOut()
         } catch {
             loadError = error.localizedDescription
         }
@@ -1047,18 +919,7 @@ final class AppSession {
             return (profile, tracks, warning)
         }
 
-        do {
-            let access = try await validAccessToken()
-            return try await fetchParts(access)
-        } catch let apiErr as SpotifyAPIError {
-            if case .http(401, _) = apiErr, let session = storedSession {
-                let refreshed = try await authService.refreshSession(session)
-                try SpotifyTokenStore.save(refreshed)
-                storedSession = refreshed
-                return try await fetchParts(refreshed.accessToken)
-            }
-            throw apiErr
-        }
+        return try await withFreshAccessToken { try await fetchParts($0) }
     }
 
     /// Top-tracks `market` must be ISO 3166-1 alpha-2; invalid values can yield errors from Spotify.
@@ -1081,6 +942,32 @@ final class AppSession {
             storedSession = session
         }
         return session.accessToken
+    }
+
+    /// Runs `operation` with a fresh access token. On `SpotifyAPIError.http(401, _)` the stored
+    /// session is refreshed once and the operation retried. If the refresh itself fails, or the
+    /// retry still fails authentication, `AppSessionError.sessionExpired` is thrown so callers
+    /// can uniformly force sign-out. All other errors propagate unchanged.
+    @discardableResult
+    private func withFreshAccessToken<T>(
+        _ operation: @MainActor (String) async throws -> T
+    ) async throws -> T {
+        let access = try await validAccessToken()
+        do {
+            return try await operation(access)
+        } catch let apiErr as SpotifyAPIError {
+            guard case .http(401, _) = apiErr, let session = storedSession else {
+                throw apiErr
+            }
+            do {
+                let refreshed = try await authService.refreshSession(session)
+                try SpotifyTokenStore.save(refreshed)
+                storedSession = refreshed
+                return try await operation(refreshed.accessToken)
+            } catch {
+                throw AppSessionError.sessionExpired
+            }
+        }
     }
 
     // MARK: - Playlists (create / add)
@@ -1213,27 +1100,13 @@ final class AppSession {
         isPublic: Bool,
         description: String?
     ) async throws -> SpotifyPlaylistItem {
-        do {
-            let token = try await validAccessToken()
-            return try await api.createPlaylist(
+        try await withFreshAccessToken { token in
+            try await self.api.createPlaylist(
                 accessToken: token,
                 name: name,
                 isPublic: isPublic,
                 description: description
             )
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                let refreshed = try await authService.refreshSession(session)
-                try SpotifyTokenStore.save(refreshed)
-                storedSession = refreshed
-                return try await api.createPlaylist(
-                    accessToken: refreshed.accessToken,
-                    name: name,
-                    isPublic: isPublic,
-                    description: description
-                )
-            }
-            throw apiErr
         }
     }
 
@@ -1316,34 +1189,14 @@ final class AppSession {
     }
 
     private func renamePlaylistWithRetry(id playlistID: String, newName: String) async throws {
-        do {
-            let token = try await validAccessToken()
-            try await api.renamePlaylist(accessToken: token, playlistID: playlistID, name: newName)
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                let refreshed = try await authService.refreshSession(session)
-                try SpotifyTokenStore.save(refreshed)
-                storedSession = refreshed
-                try await api.renamePlaylist(accessToken: refreshed.accessToken, playlistID: playlistID, name: newName)
-            } else {
-                throw apiErr
-            }
+        try await withFreshAccessToken { token in
+            try await self.api.renamePlaylist(accessToken: token, playlistID: playlistID, name: newName)
         }
     }
 
     private func deletePlaylistWithRetry(id playlistID: String) async throws {
-        do {
-            let token = try await validAccessToken()
-            try await api.deletePlaylist(accessToken: token, playlistID: playlistID)
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                let refreshed = try await authService.refreshSession(session)
-                try SpotifyTokenStore.save(refreshed)
-                storedSession = refreshed
-                try await api.deletePlaylist(accessToken: refreshed.accessToken, playlistID: playlistID)
-            } else {
-                throw apiErr
-            }
+        try await withFreshAccessToken { token in
+            try await self.api.deletePlaylist(accessToken: token, playlistID: playlistID)
         }
     }
 
@@ -1360,45 +1213,24 @@ final class AppSession {
         playlistActionError = nil
 
         do {
-            let token = try await validAccessToken()
-            _ = try await api.addItemsToPlaylist(
-                accessToken: token,
-                playlistID: playlistID,
-                trackURIs: ["spotify:track:\(trackID)"]
-            )
-            let fullTrack = try await api.fetchTrack(accessToken: token, id: trackID)
-            if var existing = playlistTracksCache[playlistID] {
-                if !existing.contains(where: { $0.id == trackID }) {
-                    existing.append(fullTrack)
-                    cachePlaylistTracks(existing, for: playlistID)
-                }
-            }
-        } catch let apiErr as SpotifyAPIError {
-            if case let .http(code, _) = apiErr, code == 401, let session = storedSession {
-                do {
-                    let refreshed = try await authService.refreshSession(session)
-                    try SpotifyTokenStore.save(refreshed)
-                    storedSession = refreshed
-                    _ = try await api.addItemsToPlaylist(
-                        accessToken: refreshed.accessToken,
-                        playlistID: playlistID,
-                        trackURIs: ["spotify:track:\(trackID)"]
-                    )
-                    let fullTrack = try await api.fetchTrack(accessToken: refreshed.accessToken, id: trackID)
-                    if var existing = playlistTracksCache[playlistID] {
-                        if !existing.contains(where: { $0.id == trackID }) {
-                            existing.append(fullTrack)
-                            cachePlaylistTracks(existing, for: playlistID)
-                        }
+            try await withFreshAccessToken { token in
+                _ = try await self.api.addItemsToPlaylist(
+                    accessToken: token,
+                    playlistID: playlistID,
+                    trackURIs: ["spotify:track:\(trackID)"]
+                )
+                let fullTrack = try await self.api.fetchTrack(accessToken: token, id: trackID)
+                if var existing = self.playlistTracksCache[playlistID] {
+                    if !existing.contains(where: { $0.id == trackID }) {
+                        existing.append(fullTrack)
+                        self.cachePlaylistTracks(existing, for: playlistID)
                     }
-                } catch let retryErr as SpotifyAPIError {
-                    playlistActionError = playlistMutationErrorMessage(retryErr)
-                } catch {
-                    playlistActionError = error.localizedDescription
                 }
-            } else {
-                playlistActionError = playlistMutationErrorMessage(apiErr)
             }
+        } catch AppSessionError.sessionExpired {
+            playlistActionError = AppSessionError.sessionExpired.localizedDescription
+        } catch let apiErr as SpotifyAPIError {
+            playlistActionError = playlistMutationErrorMessage(apiErr)
         } catch {
             playlistActionError = error.localizedDescription
         }
@@ -1407,11 +1239,14 @@ final class AppSession {
 
 enum AppSessionError: LocalizedError {
     case notSignedIn
+    case sessionExpired
 
     var errorDescription: String? {
         switch self {
         case .notSignedIn:
             return "Not signed in to Spotify."
+        case .sessionExpired:
+            return "Session expired. Please sign in again."
         }
     }
 }

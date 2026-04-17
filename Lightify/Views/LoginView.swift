@@ -33,24 +33,6 @@ struct LoginView: View {
                         .foregroundStyle(.tertiary)
                 }
                 .frame(maxWidth: .infinity)
-
-                if let err = appSession.authError {
-                    Text(err)
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(.red.opacity(0.12))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(.red.opacity(0.22), lineWidth: 1)
-                        )
-                }
             }
             .padding(.horizontal, 28)
             .padding(.top, 32)
@@ -109,6 +91,20 @@ struct LoginView: View {
         )
         .shadow(color: .black.opacity(0.22), radius: 28, y: 14)
         .shadow(color: accent.opacity(0.12), radius: 40, y: 8)
+        .alert("Sign in", isPresented: authErrorAlertBinding) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(appSession.authError ?? "")
+        }
+    }
+
+    private var authErrorAlertBinding: Binding<Bool> {
+        Binding(
+            get: { appSession.authError != nil },
+            set: { newValue in
+                if !newValue { appSession.authError = nil }
+            }
+        )
     }
 
     @ViewBuilder

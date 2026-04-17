@@ -20,6 +20,15 @@ struct NewPlaylistSheet: View {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var newPlaylistErrorAlertBinding: Binding<Bool> {
+        Binding(
+            get: { appSession.playlistActionError != nil },
+            set: { newValue in
+                if !newValue { appSession.playlistActionError = nil }
+            }
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -32,6 +41,11 @@ struct NewPlaylistSheet: View {
         .background(.ultraThickMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .onAppear { nameFieldFocused = true }
+        .alert("Playlist", isPresented: newPlaylistErrorAlertBinding) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(appSession.playlistActionError ?? "")
+        }
         .fileImporter(
             isPresented: $isPickingCover,
             allowedContentTypes: [.image],
@@ -64,16 +78,6 @@ struct NewPlaylistSheet: View {
 
                 if let pending = appSession.pendingTrackForNewPlaylist {
                     pendingTrackBanner(pending)
-                }
-
-                if let err = appSession.playlistActionError {
-                    Text(err)
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.red.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
             }
             .padding(20)

@@ -652,11 +652,17 @@ struct SpotifyRecentPlayRow: Identifiable, Sendable {
     let track: SpotifyTrack
 
     static func rows(from items: [SpotifyRecentlyPlayedPage.Item]) -> [SpotifyRecentPlayRow] {
-        items.enumerated().compactMap { index, item in
-            guard let track = item.track else { return nil }
+        var rows: [SpotifyRecentPlayRow] = []
+        rows.reserveCapacity(items.count)
+        var displayIndex = 0
+        for item in items {
+            guard let track = item.track else { continue }
+            if rows.last?.track.id == track.id { continue }
             let stamp = item.played_at ?? ""
-            return SpotifyRecentPlayRow(id: "\(index)-\(stamp)-\(track.id)", track: track)
+            rows.append(SpotifyRecentPlayRow(id: "\(displayIndex)-\(stamp)-\(track.id)", track: track))
+            displayIndex += 1
         }
+        return rows
     }
 }
 

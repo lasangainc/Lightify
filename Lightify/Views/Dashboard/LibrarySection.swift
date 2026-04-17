@@ -64,6 +64,19 @@ private func nearestSystemHeroStops(from palette: ArtworkPalette) -> (color: Col
     return (Color(nsColor: best), heroDarkenedGradientEnd(from: best))
 }
 
+/// Liked Songs hero: map each crossfade layer to a distinct system color, spread across the full palette (both appearances).
+private func systemHeroStopsForLikedLayer(index: Int, layerCount: Int) -> (color: Color, gradientEnd: Color) {
+    let n = systemHeroCandidateColors.count
+    let colorIdx: Int
+    if layerCount <= 1 {
+        colorIdx = 0
+    } else {
+        colorIdx = (index * (n - 1)) / (layerCount - 1)
+    }
+    let ns = systemHeroCandidateColors[colorIdx]
+    return (Color(nsColor: ns), heroDarkenedGradientEnd(from: ns))
+}
+
 // MARK: - Hero layout (cover)
 
 private enum LibraryHeroLayout {
@@ -636,18 +649,33 @@ struct LibraryHeroGradient: View {
                 let t = context.date.timeIntervalSinceReferenceDate
                 ZStack {
                     ForEach(Array(heroPalettes.enumerated()), id: \.offset) { index, palette in
-                        heroGradientLayer(for: palette)
+                        heroGradientLayer(
+                            for: palette,
+                            likedSongLayerIndex: index,
+                            likedSongLayerCount: heroPalettes.count
+                        )
                             .opacity(crossfadeOpacity(for: index, count: heroPalettes.count, time: t))
                     }
                 }
             }
+        } else if case .likedSongs = appSession.selectedLibrary, let palette = heroPalettes.first {
+            heroGradientLayer(for: palette, likedSongLayerIndex: 0, likedSongLayerCount: 1)
         } else if let palette = heroPalettes.first {
             heroGradientLayer(for: palette)
         }
     }
 
-    private func heroGradientLayer(for palette: ArtworkPalette) -> some View {
-        let stop = heroTintStop(for: palette)
+    private func heroGradientLayer(
+        for palette: ArtworkPalette,
+        likedSongLayerIndex: Int? = nil,
+        likedSongLayerCount: Int = 1
+    ) -> some View {
+        let stop: (color: Color, gradientEnd: Color)
+        if let idx = likedSongLayerIndex {
+            stop = systemHeroStopsForLikedLayer(index: idx, layerCount: likedSongLayerCount)
+        } else {
+            stop = heroTintStop(for: palette)
+        }
         return LinearGradient(
             colors: [
                 stop.color.opacity(0.72),
@@ -843,20 +871,24 @@ private struct LikedSongsHeartHero: View {
 
     /// Size-only slow breathe while playing (sine in/out, no opacity).
     private static func breathingScale(at date: Date) -> CGFloat {
-        let period: TimeInterval = 2.75
+        let period: TimeInterval = 2.35
         let phase = 2 * Double.pi * date.timeIntervalSinceReferenceDate / period
-        return CGFloat(1.0 + 0.04 * sin(phase))
+        return CGFloat(1.0 + 0.13 * sin(phase))
     }
 
     private func heartImage(beatScale: CGFloat) -> some View {
         let pullScale: CGFloat = isPulled ? 0.98 : 1.0
+        let fillColor: Color = isPlayingLikedSong ? .green : Color.secondary
+        let shadowColor: Color = isPlayingLikedSong
+            ? Color.green.opacity(0.45)
+            : Color.black.opacity(0.28)
 
         return Image(systemName: "heart.fill")
             .resizable()
             .scaledToFit()
             .frame(width: Self.heartSize, height: Self.heartSize)
-            .foregroundStyle(Color("AccentColor"))
-            .shadow(color: .black.opacity(0.3), radius: 7, y: 3)
+            .foregroundStyle(fillColor)
+            .shadow(color: shadowColor, radius: isPlayingLikedSong ? 10 : 5, y: isPlayingLikedSong ? 3 : 2)
             .scaleEffect(beatScale * pullScale)
     }
 }

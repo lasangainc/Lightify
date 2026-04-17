@@ -8,26 +8,67 @@ import SwiftUI
 
 // MARK: - Hero tint (light mode)
 
-/// Full HSB saturation while keeping hue and brightness (used for light-mode hero washes).
-private func heroColorWithMaxSaturation(_ color: Color) -> Color {
-    let ns = NSColor(color)
+/// Semantic system colors used for light-mode hero gradients (closest-hue match to artwork).
+private let systemHeroCandidateColors: [NSColor] = [
+    .systemRed, .systemOrange, .systemYellow, .systemGreen,
+    .systemMint, .systemTeal, .systemCyan, .systemBlue,
+    .systemIndigo, .systemPurple, .systemPink
+]
+
+/// Darkened RGB stop matching `ArtworkColorSampler`’s `averageDark` scale (0.58).
+private func heroDarkenedGradientEnd(from nsColor: NSColor) -> Color {
+    let rgb = nsColor.usingColorSpace(.deviceRGB) ?? nsColor
+    var r: CGFloat = 0
+    var g: CGFloat = 0
+    var b: CGFloat = 0
+    var a: CGFloat = 0
+    rgb.getRed(&r, green: &g, blue: &b, alpha: &a)
+    let darkScale: CGFloat = 0.58
+    return Color(
+        red: min(max(r * darkScale, 0), 1),
+        green: min(max(g * darkScale, 0), 1),
+        blue: min(max(b * darkScale, 0), 1),
+        opacity: a
+    )
+}
+
+private func nearestSystemHeroStops(from palette: ArtworkPalette) -> (color: Color, gradientEnd: Color) {
+    let reference = palette.vibrant?.color ?? palette.average
+    let ns = NSColor(reference)
     let rgb = ns.usingColorSpace(.deviceRGB) ?? ns
     var h: CGFloat = 0
     var s: CGFloat = 0
     var b: CGFloat = 0
     var a: CGFloat = 0
     rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-    return Color(nsColor: NSColor(calibratedHue: h, saturation: 1, brightness: b, alpha: a))
+    if s < 0.12 {
+        let gray = NSColor.systemGray
+        return (Color(nsColor: gray), heroDarkenedGradientEnd(from: gray))
+    }
+    var best = NSColor.systemBlue
+    var bestHueDist = CGFloat.greatestFiniteMagnitude
+    for candidate in systemHeroCandidateColors {
+        let cRGB = candidate.usingColorSpace(.deviceRGB) ?? candidate
+        var ch: CGFloat = 0
+        var cs: CGFloat = 0
+        var cb: CGFloat = 0
+        var ca: CGFloat = 0
+        cRGB.getHue(&ch, saturation: &cs, brightness: &cb, alpha: &ca)
+        let delta = abs(h - ch)
+        let hueDist = min(delta, 1 - delta)
+        if hueDist < bestHueDist {
+            bestHueDist = hueDist
+            best = candidate
+        }
+    }
+    return (Color(nsColor: best), heroDarkenedGradientEnd(from: best))
 }
 
-// MARK: - Hero layout (cover + background glow alignment)
+// MARK: - Hero layout (cover)
 
 private enum LibraryHeroLayout {
     static let coverSide: CGFloat = 140
     static let contentPadding: CGFloat = 20
-    /// Center of the square cover art in dashboard content coordinates (matches `ScrollView` padding + cover frame).
-    static var coverCenterX: CGFloat { contentPadding + coverSide / 2 }
-    static var coverCenterY: CGFloat { contentPadding + coverSide / 2 }
 }
 
 // MARK: - Hero header
@@ -549,35 +590,15 @@ struct LibraryHeroGradient: View {
     @Environment(\.colorScheme) private var colorScheme
     @Binding var heroPalettes: [ArtworkPalette]
 
-    /// Light mode + playlist/album: soft glow anchored to cover art only (not Liked Songs).
-    private var useCoverAnchoredLightGlow: Bool {
-        colorScheme == .light && libraryUsesSquareCoverHeroGradient
-    }
-
-    private var libraryUsesSquareCoverHeroGradient: Bool {
-        switch appSession.selectedLibrary {
-        case .playlist, .album:
-            return true
-        default:
-            return false
-        }
-    }
-
     var body: some View {
         ZStack {
             if libraryHasHeroGradient, !heroPalettes.isEmpty {
                 Group {
-                    if useCoverAnchoredLightGlow {
-                        heroGradientContent
-                            .frame(height: 420)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                    } else {
-                        heroGradientContent
-                            .frame(height: 440)
-                            .frame(maxWidth: .infinity)
-                            .blur(radius: 32)
-                            .opacity(0.95)
-                    }
+                    heroGradientContent
+                        .frame(height: 440)
+                        .frame(maxWidth: .infinity)
+                        .blur(radius: 32)
+                        .opacity(0.95)
                 }
                 .allowsHitTesting(false)
                 .transition(.opacity)
@@ -610,9 +631,7 @@ struct LibraryHeroGradient: View {
 
     @ViewBuilder
     private var heroGradientContent: some View {
-        if useCoverAnchoredLightGlow, let palette = heroPalettes.first {
-            coverAnchoredLightGlow(for: palette)
-        } else if case .likedSongs = appSession.selectedLibrary, heroPalettes.count > 1 {
+        if case .likedSongs = appSession.selectedLibrary, heroPalettes.count > 1 {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 ZStack {
@@ -624,53 +643,6 @@ struct LibraryHeroGradient: View {
             }
         } else if let palette = heroPalettes.first {
             heroGradientLayer(for: palette)
-        }
-    }
-
-    /// Wide, soft radial wash centered on the playlist/album artwork (light mode only).
-    private func coverAnchoredLightGlow(for palette: ArtworkPalette) -> some View {
-        let stop = heroTintStop(for: palette)
-        return GeometryReader { geo in
-            let cx = LibraryHeroLayout.coverCenterX
-            let cy = LibraryHeroLayout.coverCenterY
-            let spreadW = max(geo.size.width * 1.12, 540)
-            let spreadH: CGFloat = 400
-
-            ZStack {
-                Ellipse()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                stop.color.opacity(0.42),
-                                stop.gradientEnd.opacity(0.16),
-                                Color.clear
-                            ],
-                            center: .center,
-                            startRadius: 2,
-                            endRadius: max(spreadW, spreadH) * 0.46
-                        )
-                    )
-                    .frame(width: spreadW, height: spreadH)
-                    .blur(radius: 46)
-
-                Ellipse()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                stop.color.opacity(0.14),
-                                Color.clear
-                            ],
-                            center: .center,
-                            startRadius: 72,
-                            endRadius: max(spreadW, spreadH) * 0.62
-                        )
-                    )
-                    .frame(width: spreadW * 1.28, height: spreadH * 1.22)
-                    .blur(radius: 58)
-            }
-            .frame(width: spreadW * 1.28, height: spreadH * 1.22)
-            .position(x: cx, y: cy)
-            .frame(width: geo.size.width, height: 420, alignment: .topLeading)
         }
     }
 
@@ -688,19 +660,10 @@ struct LibraryHeroGradient: View {
     }
 
     private func heroTintStop(for palette: ArtworkPalette) -> (color: Color, gradientEnd: Color) {
-        let primary: Color
-        let end: Color
-        if colorScheme == .light, let vibrant = palette.vibrant {
-            primary = vibrant.color
-            end = palette.averageDark
-        } else {
-            primary = palette.average
-            end = palette.averageDark
-        }
         if colorScheme == .light {
-            return (heroColorWithMaxSaturation(primary), heroColorWithMaxSaturation(end))
+            return nearestSystemHeroStops(from: palette)
         }
-        return (primary, end)
+        return (palette.average, palette.averageDark)
     }
 
     /// Returns the alpha for palette `index` at time `time`, cycling through all palettes

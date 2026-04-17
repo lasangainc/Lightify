@@ -8,10 +8,11 @@ import SwiftUI
 struct DashboardView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(PlaybackViewModel.self) private var playback
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isRenamePlaylistAlertPresented = false
     @State private var renamePlaylistDraft = ""
     @State private var deletePlaylistTarget: SpotifyPlaylistItem?
-    @State private var heroTint: (color: Color, gradientEnd: Color, luminance: CGFloat)?
+    @State private var heroPalettes: [ArtworkPalette] = []
 
     var body: some View {
         NavigationSplitView {
@@ -100,7 +101,7 @@ struct DashboardView: View {
                     .background(alignment: .top) {
                         libraryHeroGradient
                     }
-                    .animation(.easeInOut(duration: 0.35), value: heroTint?.color)
+                    .animation(.easeInOut(duration: 0.35), value: heroPalettes.count)
                     .task(id: heroGradientTaskKey) {
                         await refreshHeroTint()
                     }
@@ -887,7 +888,14 @@ struct DashboardView: View {
 
     private var libraryHeroHeader: some View {
         HStack(alignment: .top, spacing: 16) {
-            libraryCoverHero
+            if case .likedSongs = appSession.selectedLibrary {
+                LikedSongsHeartHero(
+                    tracks: appSession.likedSongs,
+                    isPlayingLikedSong: isPlayingLikedSong
+                )
+            } else {
+                libraryCoverHero
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
@@ -940,6 +948,14 @@ struct DashboardView: View {
 
     private var libraryContextIsActiveAndPlaying: Bool {
         selectedPlaylistIsActiveAndPlaying || selectedAlbumIsActiveAndPlaying
+    }
+
+    /// True when a song from the user's liked tracks is currently playing.
+    private var isPlayingLikedSong: Bool {
+        guard let np = playback.nowPlaying, np.isPlaying else { return false }
+        guard let uri = np.uri else { return false }
+        let trackID = uri.split(separator: ":").last.map(String.init) ?? ""
+        return appSession.likedTrackIDs.contains(trackID)
     }
 
     private var libraryPlayPillButton: some View {
@@ -1101,42 +1117,125 @@ struct DashboardView: View {
 
     private var heroGradientTaskKey: String {
         guard libraryHasHeroGradient else { return "none" }
+        if case .likedSongs = appSession.selectedLibrary {
+            let ids = appSession.likedSongs.prefix(5).map(\.id).joined(separator: "|")
+            return "likedSongs#\(ids)"
+        }
         return libraryCoverImageURL?.absoluteString ?? "placeholder"
     }
 
     @ViewBuilder
     private var libraryHeroGradient: some View {
-        if libraryHasHeroGradient, let tint = heroTint {
-            LinearGradient(
-                colors: [
-                    tint.color.opacity(0.72),
-                    tint.gradientEnd.opacity(0.32),
-                    .clear
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 440)
-            .frame(maxWidth: .infinity)
-            .blur(radius: 32)
-            .opacity(0.95)
-            .allowsHitTesting(false)
-            .transition(.opacity)
-            .ignoresSafeArea(edges: .top)
+        if libraryHasHeroGradient, !heroPalettes.isEmpty {
+            heroGradientContent
+                .frame(height: 440)
+                .frame(maxWidth: .infinity)
+                .blur(radius: 32)
+                .opacity(0.95)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+                .ignoresSafeArea(edges: .top)
         }
+    }
+
+    @ViewBuilder
+    private var heroGradientContent: some View {
+        if case .likedSongs = appSession.selectedLibrary, heroPalettes.count > 1 {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                ZStack {
+                    ForEach(Array(heroPalettes.enumerated()), id: \.offset) { index, palette in
+                        heroGradientLayer(for: palette)
+                            .opacity(crossfadeOpacity(for: index, count: heroPalettes.count, time: t))
+                    }
+                }
+            }
+        } else if let palette = heroPalettes.first {
+            heroGradientLayer(for: palette)
+        }
+    }
+
+    private func heroGradientLayer(for palette: ArtworkPalette) -> some View {
+        let stop = heroTintStop(for: palette)
+        return LinearGradient(
+            colors: [
+                stop.color.opacity(0.72),
+                stop.gradientEnd.opacity(0.32),
+                .clear
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private func heroTintStop(for palette: ArtworkPalette) -> (color: Color, gradientEnd: Color) {
+        if colorScheme == .light, let vibrant = palette.vibrant {
+            return (vibrant.color, palette.averageDark)
+        }
+        return (palette.average, palette.averageDark)
+    }
+
+    /// Returns the alpha for palette `index` at time `time`, cycling through all palettes
+    /// so that exactly two neighbours are visible during any crossfade window.
+    private func crossfadeOpacity(for index: Int, count: Int, time: TimeInterval) -> Double {
+        guard count > 1 else { return 1 }
+        let segment: TimeInterval = 6.0
+        let totalCycle = segment * Double(count)
+        let cycle = time.truncatingRemainder(dividingBy: totalCycle)
+        let position = cycle / segment
+        let activeIndex = Int(position.rounded(.down)) % count
+        let fraction = position - position.rounded(.down)
+        let eased = 0.5 - 0.5 * cos(fraction * .pi)
+        let nextIndex = (activeIndex + 1) % count
+        if index == activeIndex { return 1 - eased }
+        if index == nextIndex { return eased }
+        return 0
     }
 
     @MainActor
     private func refreshHeroTint() async {
-        guard libraryHasHeroGradient, let url = libraryCoverImageURL else {
-            heroTint = nil
+        guard libraryHasHeroGradient else {
+            heroPalettes = []
+            return
+        }
+
+        if case .likedSongs = appSession.selectedLibrary {
+            let urls = appSession.likedSongs
+                .prefix(5)
+                .compactMap(\.largestAlbumImageURL)
+            guard !urls.isEmpty else {
+                heroPalettes = []
+                return
+            }
+
+            var palettes: [ArtworkPalette] = []
+            for url in urls {
+                do {
+                    let image = try await ArtworkPipeline.shared.image(for: url, maxPixelSize: 96)
+                    if let palette = ArtworkColorSampler.palette(from: image) {
+                        palettes.append(palette)
+                    }
+                } catch {
+                    continue
+                }
+            }
+            heroPalettes = palettes
+            return
+        }
+
+        guard let url = libraryCoverImageURL else {
+            heroPalettes = []
             return
         }
         do {
             let image = try await ArtworkPipeline.shared.image(for: url, maxPixelSize: 96)
-            heroTint = ArtworkColorSampler.tint(from: image)
+            if let palette = ArtworkColorSampler.palette(from: image) {
+                heroPalettes = [palette]
+            } else {
+                heroPalettes = []
+            }
         } catch {
-            heroTint = nil
+            heroPalettes = []
         }
     }
 
@@ -1640,6 +1739,136 @@ private struct LikedSongCarouselCard: View {
         }
         .frame(width: 140, height: 140)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Liked Songs heart hero
+
+/// Hero visual for the Liked Songs page: a small SF Symbol heart surrounded by
+/// seven liked-song covers orbiting on a tilted ellipse. Pressing and holding
+/// the heart "gravitates" the covers inward; releasing springs them back out.
+/// The heart only beats while a liked song is actively playing.
+private struct LikedSongsHeartHero: View {
+    let tracks: [SpotifyTrack]
+    let isPlayingLikedSong: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var isPulled: Bool = false
+    @State private var pressFeedback: Int = 0
+
+    private static let heroSide: CGFloat = 220
+    private static let heartSize: CGFloat = 64
+    private static let baseRadius: CGFloat = 88
+    private static let pulledScale: CGFloat = 0.38
+    /// Varied cover sizes so the orbit feels more characterful than a wheel of clones.
+    /// Cycled by index so any count of tracks gets a distinct rhythm.
+    private static let coverSides: [CGFloat] = [56, 38, 50, 44, 58, 40, 48]
+
+    private var orbitingTracks: [SpotifyTrack] {
+        Array(tracks.prefix(7))
+    }
+
+    private var angularSpeed: Double { reduceMotion ? 0 : 0.22 }
+
+    var body: some View {
+        ZStack {
+            if orbitingTracks.isEmpty {
+                heartView
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    let rotation = t * angularSpeed
+                    let count = orbitingTracks.count
+                    let radius = Self.baseRadius * (isPulled ? Self.pulledScale : 1.0)
+
+                    ZStack {
+                        ForEach(Array(orbitingTracks.enumerated()), id: \.element.id) { index, track in
+                            let angle = (Double(index) / Double(count)) * 2 * .pi - .pi / 2 + rotation
+                            let s = sin(angle)
+                            let x = CGFloat(cos(angle)) * radius
+                            let y = CGFloat(s) * radius
+                            let side = Self.coverSides[index % Self.coverSides.count]
+
+                            OrbitingCover(track: track, side: side)
+                                .offset(x: x, y: y)
+                                .zIndex(s)
+                        }
+
+                        heartView
+                            .zIndex(0)
+                    }
+                }
+            }
+        }
+        .frame(width: Self.heroSide, height: Self.heroSide)
+        .contentShape(Rectangle())
+        .gesture(gravitateGesture)
+        .animation(.spring(duration: 0.55, bounce: 0.28), value: isPulled)
+        .animation(.spring(duration: 0.9, bounce: 0.3), value: orbitingTracks.map(\.id))
+        .sensoryFeedback(.impact(weight: .light), trigger: pressFeedback)
+    }
+
+    /// Press-and-hold: covers gravitate inward while finger is down, spring back on release.
+    private var gravitateGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { _ in
+                if !isPulled {
+                    isPulled = true
+                    pressFeedback &+= 1
+                }
+            }
+            .onEnded { _ in
+                isPulled = false
+            }
+    }
+
+    private var heartView: some View {
+        let gradient = LinearGradient(
+            colors: [
+                Color.white.opacity(0.92),
+                Color(red: 0.96, green: 0.80, blue: 0.86).opacity(0.85)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+
+        return Image(systemName: "heart.fill")
+            .resizable()
+            .scaledToFit()
+            .frame(width: Self.heartSize, height: Self.heartSize)
+            .foregroundStyle(gradient)
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+            .symbolEffect(
+                .pulse.byLayer,
+                options: (isPlayingLikedSong && !reduceMotion) ? .repeating : .nonRepeating,
+                isActive: isPlayingLikedSong && !reduceMotion
+            )
+            .scaleEffect(isPulled ? 0.92 : 1.0)
+    }
+}
+
+private struct OrbitingCover: View {
+    let track: SpotifyTrack
+    let side: CGFloat
+
+    var body: some View {
+        RemoteArtworkImage(url: track.largestAlbumImageURL, maxPixelSize: side * 2) { image in
+            image
+                .resizable()
+                .aspectRatio(1, contentMode: .fill)
+        } placeholder: {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.quaternary)
+                .overlay {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+        }
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .shadow(color: .black.opacity(0.4), radius: 5, y: 2)
     }
 }
 

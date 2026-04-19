@@ -426,6 +426,14 @@ struct PlaylistTracksSection: View {
     let onRenameTapped: () -> Void
     let onDeleteTapped: () -> Void
 
+    /// Pass-through for removing tracks when the open playlist is one the user can edit.
+    private var playlistIDForTrackRemoval: String? {
+        guard case .playlist(let playlistID) = appSession.selectedLibrary,
+              appSession.canEditPlaylist(id: playlistID)
+        else { return nil }
+        return playlistID
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             LibraryHeroHeader(onRenameTapped: onRenameTapped, onDeleteTapped: onDeleteTapped)
@@ -447,7 +455,8 @@ struct PlaylistTracksSection: View {
                             track: track,
                             onPlay: { playback.playTrack(id: track.id) },
                             onArtistTap: DashboardTrackActions.artistTapAction(appSession: appSession, for: track),
-                            onAlbumArtTap: DashboardTrackActions.albumTapAction(appSession: appSession, for: track)
+                            onAlbumArtTap: DashboardTrackActions.albumTapAction(appSession: appSession, for: track),
+                            playlistIDForTrackRemoval: playlistIDForTrackRemoval
                         )
                         Divider()
                     }

@@ -5,6 +5,7 @@
 
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -135,6 +136,7 @@ final class AppSession {
     var isMutatingSelectedPlaylist: Bool = false
 
     private var ongoingPlaylistAddKeys: Set<String> = []
+    private var ongoingPlaylistRemoveKeys: Set<String> = []
     /// Last non-album library selection so album detail can offer a contextual Back action.
     private var albumBackSelection: LibrarySelection?
 
@@ -219,6 +221,13 @@ final class AppSession {
     /// Library playlist entry wins over search-only cached metadata.
     func resolvedPlaylist(id: String) -> SpotifyPlaylistItem? {
         playlists.first(where: { $0.id == id }) ?? playlistMetadataByID[id]
+    }
+
+    /// Whether the user can likely remove tracks via the Web API (owner or collaborator on a non–Liked-Songs mirror playlist).
+    func canEditPlaylist(id: String) -> Bool {
+        guard let pl = resolvedPlaylist(id: id) else { return false }
+        return !pl.isLikelyLikedSongsMirror
+            && pl.isLikelyEditableByCurrentUser(currentUserId: currentSpotifyUserId)
     }
 
     /// Navigation bar title for the detail column, including playlist names from search.
@@ -340,6 +349,12 @@ final class AppSession {
     }
 
     func bootstrap() async {
+        // `ContentView`’s `.task` runs again when the main window reopens (e.g. after mini player).
+        // Session + caches already live in memory — avoid resetting to loading / refetching library.
+        if phase == .ready {
+            return
+        }
+
         phase = .bootstrapping
 
         do {
@@ -1061,6 +1076,10 @@ final class AppSession {
         ongoingPlaylistAddKeys.contains("\(trackID)|\(playlistID)")
     }
 
+    func isRemovingTrack(_ trackID: String, fromPlaylist playlistID: String) -> Bool {
+        ongoingPlaylistRemoveKeys.contains("\(trackID)|\(playlistID)")
+    }
+
     /// Creates a playlist, optionally uploads cover art, optionally adds `pendingTrackForNewPlaylist`, then selects the new playlist.
     func createPlaylistFromSheet(
         name: String,
@@ -1309,6 +1328,41 @@ final class AppSession {
         } catch {
             playlistActionError = error.localizedDescription
             throw error
+        }
+    }
+
+    /// Removes a track URI from a playlist (all occurrences, matching Spotify) and updates the in-memory track list with animation when this playlist is cached.
+    func removeTrackFromPlaylist(trackID: String, playlistID: String) async {
+        let key = "\(trackID)|\(playlistID)"
+        guard storedSession != nil else {
+            playlistActionError = AppSessionError.notSignedIn.localizedDescription
+            return
+        }
+        guard !ongoingPlaylistRemoveKeys.contains(key) else { return }
+        ongoingPlaylistRemoveKeys.insert(key)
+        defer { ongoingPlaylistRemoveKeys.remove(key) }
+        playlistActionError = nil
+
+        do {
+            try await withFreshAccessToken { token in
+                try await self.api.removeItemsFromPlaylist(
+                    accessToken: token,
+                    playlistID: playlistID,
+                    trackURIs: ["spotify:track:\(trackID)"]
+                )
+            }
+            withAnimation(.snappy(duration: 0.32)) {
+                if var existing = self.playlistTracksCache[playlistID] {
+                    existing.removeAll { $0.id == trackID }
+                    self.cachePlaylistTracks(existing, for: playlistID)
+                }
+            }
+        } catch AppSessionError.sessionExpired {
+            playlistActionError = AppSessionError.sessionExpired.localizedDescription
+        } catch let apiErr as SpotifyAPIError {
+            playlistActionError = playlistMutationErrorMessage(apiErr)
+        } catch {
+            playlistActionError = error.localizedDescription
         }
     }
 }

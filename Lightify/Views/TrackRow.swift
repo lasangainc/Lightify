@@ -5,20 +5,26 @@
 
 import SwiftUI
 
+private enum ListTrackRowActionSizing {
+    static let iconFont: Font = .title3
+    static let iconFrame: CGFloat = 28
+}
+
 struct TrackAddToPlaylistButton: View {
     let track: SpotifyTrack
     @Environment(AppSession.self) private var appSession
     @State private var showsCheckmark = false
     @State private var isPickerOpen = false
+    @State private var resetPlusTask: Task<Void, Never>?
 
     var body: some View {
         Button {
             isPickerOpen = true
         } label: {
             Image(systemName: showsCheckmark ? "checkmark" : "plus")
-                .font(.body)
+                .font(ListTrackRowActionSizing.iconFont)
                 .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
+                .frame(width: ListTrackRowActionSizing.iconFrame, height: ListTrackRowActionSizing.iconFrame)
                 .contentTransition(
                     .symbolEffect(.replace.magic(fallback: .downUp.byLayer), options: .nonRepeating)
                 )
@@ -26,6 +32,10 @@ struct TrackAddToPlaylistButton: View {
         .buttonStyle(.plain)
         .help("Add to playlist")
         .accessibilityLabel(showsCheckmark ? "Added to playlist" : "Add to playlist")
+        .onDisappear {
+            resetPlusTask?.cancel()
+            resetPlusTask = nil
+        }
         .popover(isPresented: $isPickerOpen, arrowEdge: .bottom) {
             AddToPlaylistPicker(
                 track: track,
@@ -48,6 +58,14 @@ struct TrackAddToPlaylistButton: View {
                 await Task.yield()
                 withAnimation {
                     showsCheckmark = true
+                }
+                resetPlusTask?.cancel()
+                resetPlusTask = Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled else { return }
+                    withAnimation {
+                        showsCheckmark = false
+                    }
                 }
             } catch {
             }
@@ -88,9 +106,34 @@ private struct AddToPlaylistPicker: View {
     }
 }
 
+struct TrackRemoveFromPlaylistButton: View {
+    let track: SpotifyTrack
+    let playlistID: String
+    @Environment(AppSession.self) private var appSession
+
+    var body: some View {
+        let busy = appSession.isRemovingTrack(track.id, fromPlaylist: playlistID)
+        Button {
+            Task { await appSession.removeTrackFromPlaylist(trackID: track.id, playlistID: playlistID) }
+        } label: {
+            Image(systemName: "trash")
+                .font(ListTrackRowActionSizing.iconFont)
+                .foregroundStyle(.secondary)
+                .frame(width: ListTrackRowActionSizing.iconFrame, height: ListTrackRowActionSizing.iconFrame)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .opacity(busy ? 0.45 : 1)
+        .help("Remove from playlist")
+        .accessibilityLabel("Remove \(track.name) from playlist")
+    }
+}
+
 struct TrackHeartButton: View {
     let track: SpotifyTrack
     @Environment(AppSession.self) private var appSession
+
+    private static let heartSymbolAnimation = Animation.smooth(duration: 0.35)
 
     var body: some View {
         let liked = appSession.isTrackLiked(track.id)
@@ -99,8 +142,11 @@ struct TrackHeartButton: View {
             Task { await appSession.toggleLikedStatus(for: track) }
         } label: {
             Image(systemName: liked ? "heart.fill" : "heart")
-                .font(.body)
+                .font(ListTrackRowActionSizing.iconFont)
                 .foregroundStyle(liked ? Color("AccentColor") : .secondary)
+                .frame(width: ListTrackRowActionSizing.iconFrame, height: ListTrackRowActionSizing.iconFrame)
+                .contentTransition(.symbolEffect(.replace.downUp.byLayer, options: .nonRepeating))
+                .animation(Self.heartSymbolAnimation, value: liked)
         }
         .buttonStyle(.plain)
         .disabled(busy)
@@ -117,6 +163,8 @@ struct TrackRow: View {
     var onArtistTap: (() -> Void)? = nil
     /// When set, tapping the artwork opens the album instead of playing (title/play button still play).
     var onAlbumArtTap: (() -> Void)? = nil
+    /// When set, shows remove-from-playlist (trash) in the **add-to-playlist** slot instead of the + button.
+    var playlistIDForTrackRemoval: String? = nil
 
     @Environment(PlaybackViewModel.self) private var playback
 
@@ -182,13 +230,19 @@ struct TrackRow: View {
 
             TrackHeartButton(track: track)
 
-            TrackAddToPlaylistButton(track: track)
+            if let playlistIDForTrackRemoval {
+                TrackRemoveFromPlaylistButton(track: track, playlistID: playlistIDForTrackRemoval)
+            } else {
+                TrackAddToPlaylistButton(track: track)
+            }
 
             Button {
                 playOrTogglePlayback()
             } label: {
                 Image(systemName: listPlayButtonShowsPause ? "pause.circle" : "play.circle")
+                    .font(ListTrackRowActionSizing.iconFont)
                     .foregroundStyle(.secondary)
+                    .frame(width: ListTrackRowActionSizing.iconFrame, height: ListTrackRowActionSizing.iconFrame)
                     .contentTransition(
                         .symbolEffect(.replace.magic(fallback: .downUp.byLayer), options: .nonRepeating)
                     )

@@ -5,6 +5,11 @@
 
 import SwiftUI
 
+/// Shared scene identifier for `WindowGroup` / `dismissWindow`.
+enum MainWindowScene {
+    static let id = "main"
+}
+
 /// Shared scene identifier for `Window` / `openWindow`.
 enum MiniPlayerWindowScene {
     static let id = "miniPlayer"
@@ -13,8 +18,11 @@ enum MiniPlayerWindowScene {
 struct MiniPlayerWindowView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(PlaybackViewModel.self) private var playback
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var skipBackBounceTick = 0
     @State private var skipForwardBounceTick = 0
+    @State private var lyricsBounceTick = 0
     @State private var sampledTint: (color: Color, gradientEnd: Color, luminance: CGFloat)?
 
     private static let symbolReplace = Animation.smooth(duration: 0.23)
@@ -34,6 +42,10 @@ struct MiniPlayerWindowView: View {
         useLightForeground ? .white : Color("AccentColor")
     }
 
+    private var lyricsForeground: Color {
+        .white
+    }
+
     /// Full size while playing or when idle; slightly smaller when a track is loaded but paused.
     private var artworkDisplayScale: CGFloat {
         guard let np = playback.nowPlaying else { return 1.0 }
@@ -45,33 +57,11 @@ struct MiniPlayerWindowView: View {
             artworkWindowBackground
                 .ignoresSafeArea()
 
-            VStack(spacing: 14) {
-                artworkSection
-
-                GlassEffectContainer(spacing: 18) {
-                    VStack(spacing: 14) {
-                        trackMetadataBubble
-
-                        if let np = playback.nowPlaying, !playback.autoplayBlocked {
-                            PlaybackScrubber(
-                                positionMs: np.positionMs,
-                                durationMs: np.durationMs,
-                                isEnabled: playback.isWebPlayerReady
-                            ) { positionMs in
-                                playback.seek(to: positionMs)
-                            }
-                            .padding(.horizontal, 2)
-                        }
-
-                        transportBubble
-
-                        volumeBubble
-                    }
-                }
+            if playback.miniPlayerShowsLyricsPanel {
+                expandedPlayerWithLyricsLayout
+            } else {
+                compactPlayerLayout
             }
-            .padding(20)
-            .padding(.top, 12)
-            .frame(minWidth: 300, idealWidth: 320, maxWidth: 380)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .tint(controlTint)
@@ -86,14 +76,114 @@ struct MiniPlayerWindowView: View {
         .playbackIssueAlerts()
     }
 
+    /// Default narrow mini player (PIP-style); centered when the window is wider than the column.
+    private var compactPlayerLayout: some View {
+        HStack {
+            Spacer(minLength: 0)
+            VStack(spacing: 14) {
+                artworkSection(side: 220)
+
+                GlassEffectContainer(spacing: 18) {
+                    playerChromeStack(spacing: 14)
+                }
+            }
+            .padding(20)
+            .padding(.top, 12)
+            .frame(minWidth: 300, idealWidth: 320, maxWidth: 380)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Wide layout: controls + artwork on the left, fetched lyrics (line-by-line) on the right.
+    private var expandedPlayerWithLyricsLayout: some View {
+        HStack(alignment: .top, spacing: 44) {
+            VStack(spacing: 14) {
+                artworkSection(side: 172)
+
+                GlassEffectContainer(spacing: 14) {
+                    playerChromeStack(spacing: 12)
+                }
+            }
+            .frame(width: 356, alignment: .top)
+            .padding(.leading, 28)
+            .padding(.vertical, 22)
+
+            lyricsColumn
+        }
+        .padding(.trailing, 26)
+        .frame(minWidth: 820, idealWidth: 980, minHeight: 500)
+    }
+
+    private var lyricsColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let np = playback.nowPlaying {
+                MiniPlayerLyricsPanel(trackName: np.trackName, artistName: np.artistName)
+            } else {
+                Text("Nothing playing")
+                    .font(.body)
+                    .foregroundStyle(lyricsForeground.opacity(0.72))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
+        }
+        .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func playerChromeStack(spacing: CGFloat) -> some View {
+        VStack(spacing: spacing) {
+            trackMetadataBubble
+
+            if let np = playback.nowPlaying, !playback.autoplayBlocked {
+                PlaybackScrubber(
+                    positionMs: np.positionMs,
+                    durationMs: np.durationMs,
+                    isEnabled: playback.isWebPlayerReady
+                ) { positionMs in
+                    playback.seek(to: positionMs)
+                }
+                .padding(.horizontal, 2)
+            }
+
+            transportBubble
+
+            volumeBubble
+        }
+    }
+
     private var artworkWindowBackground: some View {
-        Group {
+        ZStack {
             if let tint = sampledTint {
                 LinearGradient(
-                    colors: [tint.color, tint.gradientEnd],
+                    colors: [
+                        tint.gradientEnd.opacity(0.96),
+                        tint.color.opacity(0.94),
+                        tint.gradientEnd.opacity(0.98)
+                    ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
+                .overlay {
+                    RadialGradient(
+                        colors: [
+                            .white.opacity(useLightForeground ? 0.08 : 0.18),
+                            .clear
+                        ],
+                        center: .center,
+                        startRadius: 30,
+                        endRadius: 420
+                    )
+                }
+                .overlay(alignment: .trailing) {
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            .black.opacity(0.1),
+                            .black.opacity(0.22)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                }
             } else {
                 Color(nsColor: .underPageBackgroundColor)
             }
@@ -112,7 +202,7 @@ struct MiniPlayerWindowView: View {
         }
     }
 
-    private var artworkSection: some View {
+    private func artworkSection(side: CGFloat) -> some View {
         Button {
             Task {
                 await appSession.openAlbumFromPlaybackState(
@@ -123,9 +213,9 @@ struct MiniPlayerWindowView: View {
             }
         } label: {
             artworkImage
-                .frame(width: 220, height: 220)
+                .frame(width: side, height: side)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
+                .shadow(color: .black.opacity(0.35), radius: side > 200 ? 16 : 12, y: side > 200 ? 8 : 6)
                 .scaleEffect(artworkDisplayScale)
                 .animation(Self.artworkScaleAnimation, value: artworkDisplayScale)
         }
@@ -251,6 +341,38 @@ struct MiniPlayerWindowView: View {
                 .font(.caption.monospacedDigit().weight(.medium))
                 .foregroundStyle(.primary)
                 .frame(minWidth: 32, alignment: .trailing)
+
+            Button {
+                guard playback.nowPlaying != nil else { return }
+                lyricsBounceTick &+= 1
+                if playback.miniPlayerShowsLyricsPanel {
+                    playback.dismissMiniPlayerLyricsPanel()
+                } else {
+                    playback.presentMiniPlayerWithLyricsPanel()
+                }
+            } label: {
+                Image(systemName: playback.miniPlayerShowsLyricsPanel ? "quote.bubble.fill" : "quote.bubble")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(width: 22, alignment: .center)
+                    .symbolEffect(.bounce.down.byLayer, options: .nonRepeating, value: lyricsBounceTick)
+            }
+            .buttonStyle(.plain)
+            .disabled(playback.nowPlaying == nil)
+            .opacity(playback.nowPlaying == nil ? 0.4 : 1)
+            .help(playback.miniPlayerShowsLyricsPanel ? "Hide lyrics" : "Show lyrics")
+
+            Button {
+                openWindow(id: MainWindowScene.id)
+                dismissWindow(id: MiniPlayerWindowScene.id)
+            } label: {
+                Image(systemName: "pip.exit")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(width: 22, alignment: .center)
+            }
+            .buttonStyle(.plain)
+            .help("Return to main window")
         }
         .padding(.vertical, 10)
         .padding(.leading, 12)

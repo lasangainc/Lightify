@@ -8,54 +8,83 @@ import SwiftUI
 struct TrackAddToPlaylistButton: View {
     let track: SpotifyTrack
     @Environment(AppSession.self) private var appSession
+    @State private var showsCheckmark = false
+    @State private var isPickerOpen = false
 
-    private var isBusy: Bool {
-        appSession.modifiablePlaylists.contains {
-            appSession.isAddingTrack(track.id, toPlaylist: $0.id)
+    var body: some View {
+        Button {
+            isPickerOpen = true
+        } label: {
+            Image(systemName: showsCheckmark ? "checkmark" : "plus")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .contentTransition(
+                    .symbolEffect(.replace.magic(fallback: .downUp.byLayer), options: .nonRepeating)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Add to playlist")
+        .accessibilityLabel(showsCheckmark ? "Added to playlist" : "Add to playlist")
+        .popover(isPresented: $isPickerOpen, arrowEdge: .bottom) {
+            AddToPlaylistPicker(
+                track: track,
+                onSelect: { playlistID in
+                    isPickerOpen = false
+                    addTrack(to: playlistID)
+                },
+                onCreateNew: {
+                    isPickerOpen = false
+                    appSession.presentNewPlaylistSheet(trackToAddFirst: track)
+                }
+            )
         }
     }
 
-    var body: some View {
-        Menu {
-            ForEach(appSession.modifiablePlaylists) { playlist in
-                Button {
-                    Task {
-                        await appSession.addTrackToPlaylist(trackID: track.id, playlistID: playlist.id)
-                    }
-                } label: {
-                    Text(playlist.name)
+    private func addTrack(to playlistID: String) {
+        Task { @MainActor in
+            do {
+                try await appSession.addTrackToPlaylist(trackID: track.id, playlistID: playlistID)
+                await Task.yield()
+                withAnimation {
+                    showsCheckmark = true
                 }
-                .disabled(appSession.isAddingTrack(track.id, toPlaylist: playlist.id))
+            } catch {
             }
+        }
+    }
+}
 
-            if !appSession.modifiablePlaylists.isEmpty {
+private struct AddToPlaylistPicker: View {
+    let track: SpotifyTrack
+    let onSelect: (String) -> Void
+    let onCreateNew: () -> Void
+
+    @Environment(AppSession.self) private var appSession
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            if appSession.modifiablePlaylists.isEmpty {
+                Text("No editable playlists")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(appSession.modifiablePlaylists) { playlist in
+                    Button(playlist.name) {
+                        onSelect(playlist.id)
+                    }
+                    .disabled(appSession.isAddingTrack(track.id, toPlaylist: playlist.id))
+                }
+
                 Divider()
             }
 
             Button {
-                appSession.presentNewPlaylistSheet(trackToAddFirst: track)
+                onCreateNew()
             } label: {
                 Label("New Playlist…", systemImage: "plus.square.on.square")
             }
-        } label: {
-            ZStack {
-                Image(systemName: "plus")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .opacity(isBusy ? 0 : 1)
-                if isBusy {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.secondary)
-                }
-            }
-            .frame(width: 22, height: 22)
         }
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
-        .tint(.secondary)
-        .disabled(isBusy)
-        .help("Add to playlist")
+        .padding()
     }
 }
 
@@ -89,13 +118,37 @@ struct TrackRow: View {
     /// When set, tapping the artwork opens the album instead of playing (title/play button still play).
     var onAlbumArtTap: (() -> Void)? = nil
 
+    @Environment(PlaybackViewModel.self) private var playback
+
+    private static let listPlayIconAnimation = Animation.spring(response: 0.16, dampingFraction: 0.52)
+
+    private var listPlayButtonShowsPause: Bool {
+        playback.isActivePlayingTrack(id: track.id)
+    }
+
+    /// Same semantics as the main play/pause control: toggle when this track is already current, otherwise start it.
+    private func playOrTogglePlayback() {
+        if playback.isNowPlayingTrack(id: track.id) {
+            playback.playPause()
+        } else {
+            onPlay()
+        }
+    }
+
+    private var playControlAccessibilityLabel: String {
+        if playback.isNowPlayingTrack(id: track.id) {
+            return (playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play"
+        }
+        return "Play \(track.name) by \(track.primaryArtistName)"
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             Button {
                 if let onAlbumArtTap {
                     onAlbumArtTap()
                 } else {
-                    onPlay()
+                    playOrTogglePlayback()
                 }
             } label: {
                 trackThumbnail
@@ -116,14 +169,14 @@ struct TrackRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
-                Button(action: onPlay) {
+                Button(action: playOrTogglePlayback) {
                     Color.clear
                         .contentShape(Rectangle())
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .buttonStyle(.plain)
                 .disabled(playDisabled)
-                .accessibilityLabel("Play \(track.name) by \(track.primaryArtistName)")
+                .accessibilityLabel(playControlAccessibilityLabel)
             }
             .opacity(playDisabled ? 0.45 : 1)
 
@@ -131,13 +184,20 @@ struct TrackRow: View {
 
             TrackAddToPlaylistButton(track: track)
 
-            Button(action: onPlay) {
-                Image(systemName: "play.circle")
+            Button {
+                playOrTogglePlayback()
+            } label: {
+                Image(systemName: listPlayButtonShowsPause ? "pause.circle" : "play.circle")
                     .foregroundStyle(.secondary)
+                    .contentTransition(
+                        .symbolEffect(.replace.magic(fallback: .downUp.byLayer), options: .nonRepeating)
+                    )
+                    .animation(Self.listPlayIconAnimation, value: listPlayButtonShowsPause)
             }
             .buttonStyle(.plain)
             .disabled(playDisabled)
             .opacity(playDisabled ? 0.45 : 1)
+            .accessibilityLabel(playControlAccessibilityLabel)
         }
         .padding(.vertical, 8)
     }

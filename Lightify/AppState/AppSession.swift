@@ -883,14 +883,20 @@ final class AppSession {
         albumTrackCacheOrder.append(albumID)
     }
 
-    /// Loads artist profile and top tracks (`GET /artists/{id}` + `/top-tracks`).
-    /// Fetches sequentially and **does not fail the whole screen** if one call returns 403 — Spotify can forbid one catalog call while the other succeeds (see [Get Artist](https://developer.spotify.com/documentation/web-api/reference/get-an-artist) / top-tracks responses). Only **401** triggers refresh + single retry.
-    func loadArtistCatalog(artistID: String) async throws -> (SpotifyArtistProfile?, [SpotifyTrack], String?) {
-        let market = Self.normalizedMarketCode(currentUserProfile?.country)
+    /// Loads artist profile, top tracks, and optional search/album fallbacks (`GET /artists/{id}`, `/top-tracks`, `/search`, `/albums`).
+    /// Suppresses error **alerts** when any section loaded successfully. Only **401** triggers refresh + single retry.
+    func loadArtistCatalog(artistID: String, nameHint: String? = nil) async throws -> (SpotifyArtistProfile?, [SpotifyTrack], [SpotifyAlbum], String?) {
+        let fetchParts: (String) async throws -> (SpotifyArtistProfile?, [SpotifyTrack], [SpotifyAlbum], String?) = { token in
+            if self.currentUserProfile == nil {
+                if let me = try? await self.api.fetchCurrentUser(accessToken: token) {
+                    self.currentUserProfile = me
+                }
+            }
+            let isoMarket = Self.normalizedMarketCode(self.currentUserProfile?.country)
 
-        let fetchParts: (String) async throws -> (SpotifyArtistProfile?, [SpotifyTrack], String?) = { token in
             var profile: SpotifyArtistProfile?
             var tracks: [SpotifyTrack] = []
+            var albums: [SpotifyAlbum] = []
             var notes: [String] = []
 
             do {
@@ -903,10 +909,10 @@ final class AppSession {
             }
 
             do {
-                tracks = try await self.api.fetchArtistTopTracks(
+                tracks = try await self.api.fetchArtistTopTracksResolvingMarket(
                     accessToken: token,
                     artistID: artistID,
-                    market: market
+                    isoMarketFallback: isoMarket
                 )
             } catch let apiErr as SpotifyAPIError {
                 if case .http(401, _) = apiErr { throw apiErr }
@@ -915,14 +921,81 @@ final class AppSession {
                 notes.append(error.localizedDescription)
             }
 
-            let warning = notes.isEmpty ? nil : notes.joined(separator: "\n")
-            return (profile, tracks, warning)
+            let searchName = profile?.name ?? nameHint
+            if tracks.isEmpty, let name = searchName, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let found = await self.tracksMatchingArtistForFallback(
+                    accessToken: token,
+                    artistID: artistID,
+                    artistName: name
+                )
+                if !found.isEmpty {
+                    tracks = found
+                }
+            }
+
+            if tracks.isEmpty {
+                do {
+                    let items = try await self.api.fetchArtistAlbumsResolvingMarket(
+                        accessToken: token,
+                        artistID: artistID,
+                        isoMarketFallback: isoMarket
+                    )
+                    var seen = Set<String>()
+                    albums = items.filter { album in
+                        guard let id = album.id, !id.isEmpty else { return false }
+                        if seen.contains(id) { return false }
+                        seen.insert(id)
+                        return true
+                    }
+                } catch let apiErr as SpotifyAPIError {
+                    if case .http(401, _) = apiErr { throw apiErr }
+                } catch {}
+            }
+
+            let hasAnything = profile != nil || !tracks.isEmpty || !albums.isEmpty
+            let warning: String?
+            if hasAnything {
+                warning = nil
+            } else {
+                warning = notes.isEmpty ? "Couldn’t load this artist." : notes.joined(separator: "\n")
+            }
+            return (profile, tracks, albums, warning)
         }
 
         return try await withFreshAccessToken { try await fetchParts($0) }
     }
 
-    /// Top-tracks `market` must be ISO 3166-1 alpha-2; invalid values can yield errors from Spotify.
+    /// Search-only track results filtered to `artistID` (fallback when top-tracks is empty or forbidden).
+    private func tracksMatchingArtistForFallback(
+        accessToken: String,
+        artistID: String,
+        artistName: String
+    ) async -> [SpotifyTrack] {
+        let trimmed = artistName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let safeName = trimmed.replacingOccurrences(of: "\"", with: "")
+
+        do {
+            let primaryQuery = "artist:\\\"\(safeName)\\\""
+            let primary = try await api.searchTracks(accessToken: accessToken, query: primaryQuery)
+            let filtered = primary.filter { track in
+                track.artists.contains { ($0.id ?? "") == artistID }
+            }
+            if !filtered.isEmpty {
+                return Array(filtered.prefix(10))
+            }
+
+            let loose = try await api.searchTracks(accessToken: accessToken, query: safeName)
+            let looseFiltered = loose.filter { track in
+                track.artists.contains { ($0.id ?? "") == artistID }
+            }
+            return Array(looseFiltered.prefix(10))
+        } catch {
+            return []
+        }
+    }
+
+    /// ISO market for `market` query fallbacks when `from_token` is rejected (400); also used by album fallback.
     private static func normalizedMarketCode(_ country: String?) -> String {
         let raw = (country ?? "US").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard raw.count == 2, raw.unicodeScalars.allSatisfy({ CharacterSet.letters.contains($0) }) else {
@@ -1201,11 +1274,11 @@ final class AppSession {
     }
 
     /// Adds a single track URI to a playlist and updates the cache when this playlist is already loaded.
-    func addTrackToPlaylist(trackID: String, playlistID: String) async {
+    func addTrackToPlaylist(trackID: String, playlistID: String) async throws {
         let key = "\(trackID)|\(playlistID)"
         guard storedSession != nil else {
             playlistActionError = AppSessionError.notSignedIn.localizedDescription
-            return
+            throw AppSessionError.notSignedIn
         }
         guard !ongoingPlaylistAddKeys.contains(key) else { return }
         ongoingPlaylistAddKeys.insert(key)
@@ -1229,10 +1302,13 @@ final class AppSession {
             }
         } catch AppSessionError.sessionExpired {
             playlistActionError = AppSessionError.sessionExpired.localizedDescription
+            throw AppSessionError.sessionExpired
         } catch let apiErr as SpotifyAPIError {
             playlistActionError = playlistMutationErrorMessage(apiErr)
+            throw apiErr
         } catch {
             playlistActionError = error.localizedDescription
+            throw error
         }
     }
 }

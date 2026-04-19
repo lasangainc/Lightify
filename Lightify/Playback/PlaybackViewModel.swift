@@ -128,6 +128,17 @@ final class PlaybackViewModel {
         }
     }
 
+    /// True when this track is the current Web Playback item (playing or paused).
+    func isNowPlayingTrack(id trackID: String) -> Bool {
+        guard let uri = nowPlaying?.uri else { return false }
+        return uri == "spotify:track:\(trackID)"
+    }
+
+    /// True when this track is current and actively playing (list rows show a pause glyph).
+    func isActivePlayingTrack(id trackID: String) -> Bool {
+        (nowPlaying?.isPlaying ?? false) && isNowPlayingTrack(id: trackID)
+    }
+
     /// Starts playback in an album, playlist, or artist context (`spotify:album:…`, `spotify:playlist:…`, `spotify:artist:…`).
     func playContextURI(_ uri: String) {
         Task {

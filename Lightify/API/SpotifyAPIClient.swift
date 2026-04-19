@@ -102,6 +102,83 @@ struct SpotifyAPIClient: Sendable {
         return response.tracks
     }
 
+    /// Uses `market=from_token` so catalog matches the authenticated user’s market; on **400** retries once with `isoMarketFallback` (ISO 3166-1 alpha-2).
+    func fetchArtistTopTracksResolvingMarket(
+        accessToken: String,
+        artistID: String,
+        isoMarketFallback: String
+    ) async throws -> [SpotifyTrack] {
+        do {
+            return try await fetchArtistTopTracks(accessToken: accessToken, artistID: artistID, market: Self.marketFromToken)
+        } catch let err as SpotifyAPIError {
+            if case .http(401, _) = err { throw err }
+            if case .http(400, _) = err {
+                return try await fetchArtistTopTracks(accessToken: accessToken, artistID: artistID, market: isoMarketFallback)
+            }
+            throw err
+        }
+    }
+
+    /// `GET /v1/artists/{id}/albums` — [Get Artist's Albums](https://developer.spotify.com/documentation/web-api/reference/get-an-artists-albums).
+    func fetchArtistAlbumsPage(
+        accessToken: String,
+        artistID: String,
+        market: String,
+        includeGroups: String = "album,single",
+        limit: Int = 20,
+        offset: Int = 0
+    ) async throws -> SpotifyArtistAlbumsPage {
+        precondition((1 ... 50).contains(limit), "Spotify docs: limit must be 1...50")
+        var components = URLComponents(url: endpointURL("artists/\(artistID)/albums"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "include_groups", value: includeGroups),
+            URLQueryItem(name: "market", value: market),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ]
+        return try await get(components.url!, accessToken: accessToken)
+    }
+
+    func fetchArtistAlbumsResolvingMarket(
+        accessToken: String,
+        artistID: String,
+        isoMarketFallback: String
+    ) async throws -> [SpotifyAlbum] {
+        do {
+            let page = try await fetchArtistAlbumsPage(accessToken: accessToken, artistID: artistID, market: Self.marketFromToken)
+            return page.items
+        } catch let err as SpotifyAPIError {
+            if case .http(401, _) = err { throw err }
+            if case .http(400, _) = err {
+                let page = try await fetchArtistAlbumsPage(accessToken: accessToken, artistID: artistID, market: isoMarketFallback)
+                return page.items
+            }
+            throw err
+        }
+    }
+
+    /// `GET /v1/search` with `type=track` only (limit 1…10 per Search docs).
+    func searchTracks(accessToken: String, query: String, limit: Int = 10, offset: Int = 0) async throws -> [SpotifyTrack] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        precondition((0 ... 1000).contains(offset), "Spotify docs: offset must be 0...1000")
+        let clampedLimit = min(max(limit, 1), 10)
+        var components = URLComponents(url: endpointURL("search"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: trimmed),
+            URLQueryItem(name: "type", value: "track"),
+            URLQueryItem(name: "limit", value: String(clampedLimit)),
+            URLQueryItem(name: "offset", value: String(offset)),
+        ]
+        struct Response: Decodable {
+            let tracks: SpotifySearchCatalogResponse.TracksPaging?
+        }
+        let response: Response = try await get(components.url!, accessToken: accessToken)
+        return response.tracks?.items ?? []
+    }
+
+    private static let marketFromToken = "from_token"
+
     /// `GET /v1/tracks/{id}` — metadata including album images (for Now Playing artwork fallback).
     func fetchTrack(accessToken: String, id: String) async throws -> SpotifyTrack {
         try await get(endpointURL("tracks/\(id)"), accessToken: accessToken)

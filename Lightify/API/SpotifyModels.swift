@@ -240,6 +240,10 @@ struct SpotifyArtistProfile: Decodable, Sendable, Identifiable {
     let id: String
     let name: String
     let images: [SpotifyImage]?
+    let genres: [String]?
+    let popularity: Int?
+    let followers: SpotifyArtistFollowers?
+    let external_urls: SpotifyArtistExternalURLs?
 
     var largestImageURL: URL? {
         images?
@@ -250,6 +254,41 @@ struct SpotifyArtistProfile: Decodable, Sendable, Identifiable {
             .max(by: { ($0.0.width ?? 0) < ($1.0.width ?? 0) })?
             .1
     }
+
+    /// Open in browser / Spotify app.
+    var spotifyWebURL: URL? {
+        guard let s = external_urls?.spotify, let u = URL(string: s) else { return nil }
+        return u
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, images, genres, popularity, followers, external_urls
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        images = try c.decodeIfPresent([SpotifyImage].self, forKey: .images)
+        genres = try c.decodeIfPresent([String].self, forKey: .genres)
+        popularity = try c.decodeIfPresent(Int.self, forKey: .popularity)
+        followers = try c.decodeIfPresent(SpotifyArtistFollowers.self, forKey: .followers)
+        external_urls = try c.decodeIfPresent(SpotifyArtistExternalURLs.self, forKey: .external_urls)
+    }
+}
+
+struct SpotifyArtistFollowers: Decodable, Sendable {
+    let total: Int
+}
+
+struct SpotifyArtistExternalURLs: Decodable, Sendable {
+    let spotify: String?
+}
+
+/// `GET /v1/artists/{id}/albums` — paging wrapper for simplified albums.
+struct SpotifyArtistAlbumsPage: Decodable, Sendable {
+    let items: [SpotifyAlbum]
+    let next: String?
 }
 
 /// `GET /v1/artists/{id}/top-tracks` — [Get Artist's Top Tracks](https://developer.spotify.com/documentation/web-api/reference/get-an-artists-top-tracks).

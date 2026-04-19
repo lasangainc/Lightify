@@ -3,79 +3,7 @@
 //  Lightify
 //
 
-import AppKit
 import SwiftUI
-
-// MARK: - Hero tint (light mode)
-
-/// Semantic system colors used for light-mode hero gradients (closest-hue match to artwork).
-private let systemHeroCandidateColors: [NSColor] = [
-    .systemRed, .systemOrange, .systemYellow, .systemGreen,
-    .systemMint, .systemTeal, .systemCyan, .systemBlue,
-    .systemIndigo, .systemPurple, .systemPink
-]
-
-/// Darkened RGB stop matching `ArtworkColorSampler`’s `averageDark` scale (0.58).
-private func heroDarkenedGradientEnd(from nsColor: NSColor) -> Color {
-    let rgb = nsColor.usingColorSpace(.deviceRGB) ?? nsColor
-    var r: CGFloat = 0
-    var g: CGFloat = 0
-    var b: CGFloat = 0
-    var a: CGFloat = 0
-    rgb.getRed(&r, green: &g, blue: &b, alpha: &a)
-    let darkScale: CGFloat = 0.58
-    return Color(
-        red: min(max(r * darkScale, 0), 1),
-        green: min(max(g * darkScale, 0), 1),
-        blue: min(max(b * darkScale, 0), 1),
-        opacity: a
-    )
-}
-
-private func nearestSystemHeroStops(from palette: ArtworkPalette) -> (color: Color, gradientEnd: Color) {
-    let reference = palette.vibrant?.color ?? palette.average
-    let ns = NSColor(reference)
-    let rgb = ns.usingColorSpace(.deviceRGB) ?? ns
-    var h: CGFloat = 0
-    var s: CGFloat = 0
-    var b: CGFloat = 0
-    var a: CGFloat = 0
-    rgb.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-    if s < 0.12 {
-        let gray = NSColor.systemGray
-        return (Color(nsColor: gray), heroDarkenedGradientEnd(from: gray))
-    }
-    var best = NSColor.systemBlue
-    var bestHueDist = CGFloat.greatestFiniteMagnitude
-    for candidate in systemHeroCandidateColors {
-        let cRGB = candidate.usingColorSpace(.deviceRGB) ?? candidate
-        var ch: CGFloat = 0
-        var cs: CGFloat = 0
-        var cb: CGFloat = 0
-        var ca: CGFloat = 0
-        cRGB.getHue(&ch, saturation: &cs, brightness: &cb, alpha: &ca)
-        let delta = abs(h - ch)
-        let hueDist = min(delta, 1 - delta)
-        if hueDist < bestHueDist {
-            bestHueDist = hueDist
-            best = candidate
-        }
-    }
-    return (Color(nsColor: best), heroDarkenedGradientEnd(from: best))
-}
-
-/// Liked Songs hero: map each crossfade layer to a distinct system color, spread across the full palette (both appearances).
-private func systemHeroStopsForLikedLayer(index: Int, layerCount: Int) -> (color: Color, gradientEnd: Color) {
-    let n = systemHeroCandidateColors.count
-    let colorIdx: Int
-    if layerCount <= 1 {
-        colorIdx = 0
-    } else {
-        colorIdx = (index * (n - 1)) / (layerCount - 1)
-    }
-    let ns = systemHeroCandidateColors[colorIdx]
-    return (Color(nsColor: ns), heroDarkenedGradientEnd(from: ns))
-}
 
 // MARK: - Hero layout (cover)
 
@@ -463,14 +391,14 @@ struct LikedSongsTrackList: View {
                 }
             } else if !appSession.tracksForSelectedLibrary.isEmpty {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(appSession.tracksForSelectedLibrary) { track in
+                    ForEach(Array(appSession.tracksForSelectedLibrary.enumerated()), id: \.offset) { index, track in
                         TrackRow(
                             track: track,
                             onPlay: { playback.playTrack(id: track.id) },
                             onArtistTap: DashboardTrackActions.artistTapAction(appSession: appSession, for: track),
                             onAlbumArtTap: DashboardTrackActions.albumTapAction(appSession: appSession, for: track)
                         )
-                        .task(id: track.id) {
+                        .task(id: index) {
                             await appSession.loadMoreLikedSongsIfNeeded(currentTrackID: track.id)
                         }
                         Divider()
@@ -514,7 +442,7 @@ struct PlaylistTracksSection: View {
                     .foregroundStyle(.secondary)
             } else if !appSession.tracksForSelectedLibrary.isEmpty {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(appSession.tracksForSelectedLibrary) { track in
+                    ForEach(Array(appSession.tracksForSelectedLibrary.enumerated()), id: \.offset) { _, track in
                         TrackRow(
                             track: track,
                             onPlay: { playback.playTrack(id: track.id) },
@@ -546,7 +474,7 @@ struct AlbumTracksSection: View {
                     .foregroundStyle(.secondary)
             } else if !appSession.tracksForSelectedLibrary.isEmpty {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(appSession.tracksForSelectedLibrary) { track in
+                    ForEach(Array(appSession.tracksForSelectedLibrary.enumerated()), id: \.offset) { _, track in
                         TrackRow(
                             track: track,
                             onPlay: { playback.playTrack(id: track.id) },
@@ -672,7 +600,7 @@ struct LibraryHeroGradient: View {
     ) -> some View {
         let stop: (color: Color, gradientEnd: Color)
         if let idx = likedSongLayerIndex {
-            stop = systemHeroStopsForLikedLayer(index: idx, layerCount: likedSongLayerCount)
+            stop = HeroArtworkTint.systemHeroStopsForLikedLayer(index: idx, layerCount: likedSongLayerCount)
         } else {
             stop = heroTintStop(for: palette)
         }
@@ -688,10 +616,7 @@ struct LibraryHeroGradient: View {
     }
 
     private func heroTintStop(for palette: ArtworkPalette) -> (color: Color, gradientEnd: Color) {
-        if colorScheme == .light {
-            return nearestSystemHeroStops(from: palette)
-        }
-        return (palette.average, palette.averageDark)
+        HeroArtworkTint.tintStop(for: palette, colorScheme: colorScheme)
     }
 
     /// Returns the alpha for palette `index` at time `time`, cycling through all palettes

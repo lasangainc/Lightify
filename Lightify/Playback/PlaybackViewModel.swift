@@ -394,11 +394,14 @@ final class PlaybackViewModel {
         }
     }
 
+    /// Lyrics scroll uses the same interval for linear keyframe animations between ticks.
+    static let progressTickerIntervalMs: UInt64 = 250
+
     private func startProgressTicker() {
         progressTickerTask?.cancel()
         progressTickerTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(250))
+                try? await Task.sleep(for: .milliseconds(Self.progressTickerIntervalMs))
                 guard let self, !Task.isCancelled else { break }
                 await MainActor.run {
                     self.refreshProgress()

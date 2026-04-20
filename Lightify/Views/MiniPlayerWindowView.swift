@@ -117,7 +117,13 @@ struct MiniPlayerWindowView: View {
     private var lyricsColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let np = playback.nowPlaying {
-                MiniPlayerLyricsPanel(trackName: np.trackName, artistName: np.artistName)
+                MiniPlayerLyricsPanel(
+                    trackName: np.trackName,
+                    artistName: np.artistName,
+                    positionMs: np.positionMs,
+                    durationMs: np.durationMs,
+                    isPlaying: np.isPlaying
+                )
             } else {
                 Text("Nothing playing")
                     .font(.body)

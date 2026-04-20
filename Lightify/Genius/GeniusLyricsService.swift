@@ -29,7 +29,7 @@ enum GeniusLyricsError: Error, LocalizedError, Sendable {
     }
 }
 
-/// Load Genius lyric pages (direct URL or search API), parse `data-lyrics-container` inside `<main>`.
+/// Load Genius lyric pages (direct URL or search API), parse `data-lyrics-container` inside `<main>`, then drop text before the first `[` (section tags); keep the rest through the end so unbracketed lines after the last `]` (e.g. outro) stay included.
 struct GeniusLyricsService: Sendable {
     private let session: URLSession
 
@@ -259,64 +259,15 @@ struct GeniusLyricsService: Sendable {
         let scoped = htmlMainFragment(fullHTML)
         var extracted = extractLyricsFromDataContainers(scoped)
         extracted = normalizeLyricWhitespace(extracted)
-        extracted = trimLeadingGeniusChrome(extracted)
+        extracted = sliceFromFirstOpenBracketThroughEnd(extracted)
         let trimmed = extracted.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Strips contributor counts, translation lists, and song bio before the first section label.
-    /// Accepts the common Genius form (`[Verse 1: …]`) plus looser bare/parenthetical variants.
-    private static func trimLeadingGeniusChrome(_ s: String) -> String {
-        let lines = s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-
-        for (i, line) in lines.enumerated() {
-            let t = trimLineForSectionParsing(line)
-            if t.isEmpty { continue }
-
-            if isLikelySectionHeader(t) {
-                return lines[i...].joined(separator: "\n")
-            }
-
-            // Section tag sometimes shares a line with song description HTML; keep from `[Verse …]` onward.
-            if let slice = sliceFromFirstEmbeddedSectionTag(t), isLikelySectionHeader(slice) {
-                var tail = Array(lines[i...])
-                tail[0] = slice
-                return tail.joined(separator: "\n")
-            }
-        }
-        return s
-    }
-
-    /// Trims horizontal/vertical whitespace plus invisible format characters Genius sometimes embeds at line edges (referent HTML).
-    private static func trimLineForSectionParsing(_ line: String) -> String {
-        var t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        let edgeBidiAndFormat: Set<UInt32> = {
-            var s = Set<UInt32>([0x200B, 0x200C, 0x200E, 0x200F, 0xFEFF])
-            for v in 0x202A...0x202E { s.insert(UInt32(v)) }
-            for v in 0x2060...0x2064 { s.insert(UInt32(v)) }
-            return s
-        }()
-        while let first = t.unicodeScalars.first?.value, edgeBidiAndFormat.contains(first) {
-            t.removeFirst()
-        }
-        while let last = t.unicodeScalars.last?.value, edgeBidiAndFormat.contains(last) {
-            t.removeLast()
-        }
-        return t.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// If the line contains a section label after song description text on the same line, returns from `[Verse …]` / `[Chorus]` / … onward.
-    private static func sliceFromFirstEmbeddedSectionTag(_ line: String) -> String? {
-        guard let re = try? NSRegularExpression(
-            pattern: #"\[(Verse\s*\d+|Chorus|Hook|Intro|Outro|Bridge|Refrain|Interlude|Pre-Chorus|Post-Chorus|Instrumental)"#,
-            options: [.caseInsensitive]
-        ) else { return nil }
-        let ns = line as NSString
-        let full = NSRange(location: 0, length: ns.length)
-        guard let m = re.firstMatch(in: line, options: [], range: full),
-              let r = Range(m.range, in: line)
-        else { return nil }
-        return String(line[r.lowerBound...])
+    /// Drops leading chrome before the first `[`. Keeps everything from that `[` through the end of the extracted block so lines after the final `]` (e.g. outro with no trailing bracket) are not cut off.
+    private static func sliceFromFirstOpenBracketThroughEnd(_ s: String) -> String {
+        guard let first = s.firstIndex(of: "[") else { return s }
+        return String(s[first...])
     }
 
     /// Collapses odd-width spaces Genius uses inside annotated lines.
@@ -420,24 +371,6 @@ struct GeniusLyricsService: Sendable {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
-    }
-
-    private static func isLikelySectionHeader(_ line: String) -> Bool {
-        let trimmed = trimLineForSectionParsing(line)
-        guard !trimmed.isEmpty else { return false }
-
-        let patterns = [
-            // Allow single-letter tags like `[I]` (Intro) / `[V]` (Verse) used on some pages.
-            #"^\[[^\]\n]{1,200}\]$"#,
-            #"^\([^)\n]{1,200}\)$"#,
-            #"^(?i)(verse|chorus|refrain|hook|bridge|pre-chorus|post-chorus|outro|intro|interlude|break|instrumental|part)\b[\w\s\-:&,'/.]*$"#
-        ]
-
-        return patterns.contains { pattern in
-            guard let re = try? NSRegularExpression(pattern: pattern, options: []) else { return false }
-            let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
-            return re.firstMatch(in: trimmed, options: [], range: range) != nil
-        }
     }
 
     private static func stripHTMLTags(_ html: String) -> String {

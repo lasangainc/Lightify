@@ -50,7 +50,6 @@ struct NowPlayingControls: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             centerInfo
-                .frame(minWidth: 120, maxWidth: 280)
 
             utilityCluster
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -129,6 +128,16 @@ struct NowPlayingControls: View {
             }
     }
 
+    private var expandedBarArtPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(.quaternary)
+            .overlay {
+                Image(systemName: "music.note")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+    }
+
     private var transportCluster: some View {
         HStack(spacing: 14) {
             Button {
@@ -195,27 +204,32 @@ struct NowPlayingControls: View {
     }
 
     private var centerInfo: some View {
-        VStack(spacing: 2) {
-            if let np = playback.nowPlaying {
-                VStack(spacing: 2) {
-                    Text(np.trackName)
+        HStack(alignment: .center, spacing: 8) {
+            expandedBarArtwork
+
+            VStack(spacing: 2) {
+                if let np = playback.nowPlaying {
+                    VStack(spacing: 2) {
+                        Text(np.trackName)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Text(np.artistName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                } else {
+                    Text("Lightify")
                         .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text(np.artistName)
+                    Text("Nothing playing")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
-            } else {
-                Text("Lightify")
-                    .font(.subheadline.weight(.semibold))
-                Text("Nothing playing")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
         }
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
+        .frame(minWidth: 160, maxWidth: 300)
         .overlay(alignment: .bottom) {
             if let np = playback.nowPlaying, !playback.autoplayBlocked {
                 PlaybackScrubber(
@@ -229,6 +243,32 @@ struct NowPlayingControls: View {
                 .offset(y: 10)
             }
         }
+    }
+
+    /// Album art for the expanded bar (collapsed state already shows a thumbnail).
+    private var expandedBarArtwork: some View {
+        Button {
+            Task {
+                await appSession.openAlbumFromPlaybackState(
+                    contextURI: playback.nowPlaying?.contextURI,
+                    trackURI: playback.nowPlaying?.uri,
+                    albumNameHint: playback.nowPlaying?.albumName
+                )
+            }
+        } label: {
+            RemoteArtworkImage(url: playback.nowPlaying?.artworkURL, maxPixelSize: 80) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                expandedBarArtPlaceholder
+            }
+            .frame(width: 32, height: 32)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(playback.nowPlaying == nil)
+        .help("Open album")
     }
 
     private var utilityCluster: some View {

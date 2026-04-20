@@ -207,9 +207,9 @@ struct NowPlayingControls: View {
         HStack(alignment: .center, spacing: 8) {
             expandedBarArtwork
 
-            VStack(spacing: 2) {
+            VStack(alignment: .leading, spacing: 2) {
                 if let np = playback.nowPlaying {
-                    VStack(spacing: 2) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(np.trackName)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
@@ -226,11 +226,11 @@ struct NowPlayingControls: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(minWidth: 160, maxWidth: 300)
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: .bottomLeading) {
             if let np = playback.nowPlaying, !playback.autoplayBlocked {
                 PlaybackScrubber(
                     positionMs: np.positionMs,
@@ -239,7 +239,7 @@ struct NowPlayingControls: View {
                 ) { positionMs in
                     playback.seek(to: positionMs)
                 }
-                .padding(.horizontal, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .offset(y: 10)
             }
         }

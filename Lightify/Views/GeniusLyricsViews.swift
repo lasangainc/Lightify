@@ -169,19 +169,12 @@ private struct LyricsLineMetricsKey: PreferenceKey {
     }
 }
 
-// MARK: - Line-by-line (now playing expanded; playback-synced scroll)
+// MARK: - Line-by-line (now playing expanded)
 
-/// One row per lyric line with center-weighted emphasis to mimic the large, focused lyric wall.
+/// One row per lyric line with center-weighted emphasis to mimic the large, focused lyric wall. Scroll is manual; Genius text has no per-line timestamps.
 struct GeniusLyricsLineByLineView: View {
     let lyrics: String
-    let positionMs: Int
-    let durationMs: Int
-    let isPlaying: Bool
 
-    @State private var scrollPosition = ScrollPosition()
-    @State private var maxScrollY: CGFloat = 0
-    @State private var userScrollOverrideActive = false
-    @State private var snapBackTask: Task<Void, Never>?
     @State private var viewportMidY: CGFloat = 0
     @State private var metrics: [LyricLineMetric] = []
 
@@ -192,151 +185,67 @@ struct GeniusLyricsLineByLineView: View {
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
-    /// Same curve family as snap-back; floor matches snap duration so short tracks still feel consistent.
-    private static let snapBackSmoothDuration: TimeInterval = 0.52
-    private static let playbackSmoothMaxDuration: TimeInterval = 2.15
-    /// How much of the *remaining* track length sets the smooth window (overlapping pursuits = no stair-stepping).
-    private static let playbackSmoothRemainingFraction: Double = 0.065
-
     var body: some View {
         GeometryReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 22) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                        lyricLine(line, index: index)
+            ZStack(alignment: .bottom) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 22) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                            lyricLine(line, index: index)
+                        }
+                    }
+                    .padding(.horizontal, 36)
+                    .padding(.vertical, max(proxy.size.height * 0.3, 120))
+                }
+                .coordinateSpace(name: "LyricsScrollSpace")
+                .background {
+                    GeometryReader { scrollProxy in
+                        Color.clear
+                            .preference(
+                                key: LyricsViewportMidYKey.self,
+                                value: scrollProxy.frame(in: .named("LyricsScrollSpace")).midY
+                            )
                     }
                 }
-                .padding(.horizontal, 36)
-                .padding(.vertical, max(proxy.size.height * 0.3, 120))
-            }
-            .scrollPosition($scrollPosition)
-            .onScrollGeometryChange(for: CGFloat.self, of: { geo in
-                max(0, geo.contentSize.height - geo.containerSize.height)
-            }, action: { _, newMax in
-                maxScrollY = newMax
-                if !userScrollOverrideActive {
-                    jumpScrollToPlayback()
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(0.72), location: 0.12),
+                            .init(color: .white, location: 0.34),
+                            .init(color: .white, location: 0.66),
+                            .init(color: .white.opacity(0.72), location: 0.88),
+                            .init(color: .clear, location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 }
-            })
-            .onScrollPhaseChange { oldPhase, newPhase in
-                if isUserDrivenScrollPhase(newPhase) {
-                    userScrollOverrideActive = true
-                    snapBackTask?.cancel()
-                }
-                if isUserDrivenScrollPhase(oldPhase), newPhase == .idle {
-                    scheduleSnapBackToPlayback()
-                }
+                .onPreferenceChange(LyricsViewportMidYKey.self) { viewportMidY = $0 }
+                .onPreferenceChange(LyricsLineMetricsKey.self) { metrics = $0 }
+                .background(Color.clear)
+
+                noTimeSyncFootnote
             }
-            .coordinateSpace(name: "LyricsScrollSpace")
-            .background {
-                GeometryReader { scrollProxy in
-                    Color.clear
-                        .preference(
-                            key: LyricsViewportMidYKey.self,
-                            value: scrollProxy.frame(in: .named("LyricsScrollSpace")).midY
-                        )
-                }
-            }
-            .mask {
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .white.opacity(0.72), location: 0.12),
-                        .init(color: .white, location: 0.34),
-                        .init(color: .white, location: 0.66),
-                        .init(color: .white.opacity(0.72), location: 0.88),
-                        .init(color: .clear, location: 1)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            .onPreferenceChange(LyricsViewportMidYKey.self) { viewportMidY = $0 }
-            .onPreferenceChange(LyricsLineMetricsKey.self) { metrics = $0 }
-            .onChange(of: positionMs) { oldMs, newMs in
-                smoothScrollToPlayback(from: oldMs, to: newMs)
-            }
-            .onChange(of: durationMs) { _, _ in
-                if !userScrollOverrideActive {
-                    jumpScrollToPlayback()
-                }
-            }
-            .onAppear {
-                jumpScrollToPlayback()
-            }
-            .onDisappear {
-                snapBackTask?.cancel()
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.clear)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
     }
 
-    private func isUserDrivenScrollPhase(_ phase: ScrollPhase) -> Bool {
-        switch phase {
-        case .tracking, .interacting, .decelerating:
-            true
-        case .idle, .animating:
-            false
-        @unknown default:
-            false
-        }
-    }
-
-    /// Maps playback time → vertical offset; lyrics are assumed uniformly distributed over the track length.
-    private func scrollY(positionMs playbackMs: Int) -> CGFloat {
-        guard durationMs > 0, maxScrollY > 0 else { return 0 }
-        let p = min(1, max(0, Double(playbackMs) / Double(durationMs)))
-        return min(max(CGFloat(p) * maxScrollY, 0), maxScrollY)
-    }
-
-    private func jumpScrollToPlayback() {
-        guard !userScrollOverrideActive, maxScrollY > 0, durationMs > 0 else { return }
-        scrollPosition.scrollTo(x: 0, y: scrollY(positionMs: positionMs))
-    }
-
-    /// Like snap-back: `.smooth` easing. Duration scales with **remaining** track time so longer overlap than the
-    /// ~250 ms Spotify ticks → continuous motion instead of choppy steps.
-    private func smoothScrollToPlayback(from oldMs: Int, to newMs: Int) {
-        guard !userScrollOverrideActive, maxScrollY > 0, durationMs > 0 else { return }
-        let y = scrollY(positionMs: newMs)
-        if shouldJumpScrollToPlayback(from: oldMs, to: newMs) {
-            scrollPosition.scrollTo(x: 0, y: y)
-        } else {
-            let dur = playbackScrollSmoothDuration(playbackMs: newMs)
-            withAnimation(.smooth(duration: dur)) {
-                scrollPosition.scrollTo(x: 0, y: y)
-            }
-        }
-    }
-
-    private func playbackScrollSmoothDuration(playbackMs: Int) -> TimeInterval {
-        let remainingSec = Double(max(0, durationMs - playbackMs)) / 1000.0
-        let scaled = remainingSec * Self.playbackSmoothRemainingFraction
-        return min(Self.playbackSmoothMaxDuration, max(Self.snapBackSmoothDuration, scaled))
-    }
-
-    private func shouldJumpScrollToPlayback(from oldMs: Int, to newMs: Int) -> Bool {
-        if !isPlaying { return true }
-        if newMs < oldMs { return true }
-        let delta = newMs - oldMs
-        if delta > 600 { return true }
-        if durationMs > 0, Double(delta) / Double(durationMs) > 0.06 { return true }
-        return false
-    }
-
-    private func scheduleSnapBackToPlayback() {
-        snapBackTask?.cancel()
-        snapBackTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            userScrollOverrideActive = false
-            let y = scrollY(positionMs: positionMs)
-            withAnimation(.smooth(duration: Self.snapBackSmoothDuration)) {
-                scrollPosition.scrollTo(x: 0, y: y)
-            }
-        }
+    /// Liquid Glass chip via `glassEffect` / `regular`; non-interactive so the scroll view still receives drags.
+    private var noTimeSyncFootnote: some View {
+        Text("Time sync is unavailable, sorry!")
+            .font(.system(size: 11, weight: .medium, design: .rounded))
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 20)
+            .padding(.bottom, 10)
+            .allowsHitTesting(false)
     }
 
     private func lyricLine(_ line: String, index: Int) -> some View {
@@ -383,9 +292,6 @@ struct GeniusLyricsLineByLineView: View {
 struct MiniPlayerLyricsPanel: View {
     let trackName: String
     let artistName: String
-    let positionMs: Int
-    let durationMs: Int
-    let isPlaying: Bool
 
     @State private var loadState: LoadState = .idle
 
@@ -405,12 +311,7 @@ struct MiniPlayerLyricsPanel: View {
                     .foregroundStyle(.white.opacity(0.8))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loaded(let text):
-                GeniusLyricsLineByLineView(
-                    lyrics: text,
-                    positionMs: positionMs,
-                    durationMs: durationMs,
-                    isPlaying: isPlaying
-                )
+                GeniusLyricsLineByLineView(lyrics: text)
             case .failed(let message):
                 Text(message)
                     .font(.body)

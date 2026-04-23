@@ -394,7 +394,7 @@ final class PlaybackViewModel {
         }
     }
 
-    /// Lyrics scroll uses the same interval for linear keyframe animations between ticks.
+    /// How often the progress ticker runs while playing (drives `positionMs` for UI such as the scrubber).
     static let progressTickerIntervalMs: UInt64 = 250
 
     private func startProgressTicker() {

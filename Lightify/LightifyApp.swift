@@ -31,6 +31,9 @@ struct LightifyApp: App {
         .restorationBehavior(.disabled)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
-        .defaultSize(width: 880, height: 520)
+        .defaultSize(
+            width: MiniPlayerWindowMetrics.compact.width,
+            height: MiniPlayerWindowMetrics.compact.height
+        )
     }
 }

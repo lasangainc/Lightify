@@ -5,6 +5,12 @@
 
 import SwiftUI
 
+/// Content sizes for the non-resizable mini player (see `Window` + `MiniPlayerWindowChrome`).
+enum MiniPlayerWindowMetrics {
+    static let compact = CGSize(width: 380, height: 540)
+    static let withLyrics = CGSize(width: 980, height: 520)
+}
+
 /// Shared scene identifier for `WindowGroup` / `dismissWindow`.
 enum MainWindowScene {
     static let id = "main"
@@ -53,7 +59,8 @@ struct MiniPlayerWindowView: View {
     }
 
     var body: some View {
-        ZStack {
+        let contentSize = playback.miniPlayerShowsLyricsPanel ? MiniPlayerWindowMetrics.withLyrics : MiniPlayerWindowMetrics.compact
+        return ZStack {
             artworkWindowBackground
                 .ignoresSafeArea()
 
@@ -63,7 +70,8 @@ struct MiniPlayerWindowView: View {
                 compactPlayerLayout
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: contentSize.width, height: contentSize.height)
+        .animation(.smooth(duration: 0.32), value: playback.miniPlayerShowsLyricsPanel)
         .tint(controlTint)
         .background(alignment: .topLeading) {
             MiniPlayerWindowChrome()
@@ -111,7 +119,7 @@ struct MiniPlayerWindowView: View {
             lyricsColumn
         }
         .padding(.trailing, 26)
-        .frame(minWidth: 820, idealWidth: 980, minHeight: 500)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var lyricsColumn: some View {
@@ -119,10 +127,7 @@ struct MiniPlayerWindowView: View {
             if let np = playback.nowPlaying {
                 MiniPlayerLyricsPanel(
                     trackName: np.trackName,
-                    artistName: np.artistName,
-                    positionMs: np.positionMs,
-                    durationMs: np.durationMs,
-                    isPlaying: np.isPlaying
+                    artistName: np.artistName
                 )
             } else {
                 Text("Nothing playing")
@@ -405,5 +410,5 @@ struct MiniPlayerWindowView: View {
     MiniPlayerWindowView()
         .environment(AppSession())
         .environment(PlaybackViewModel())
-        .frame(width: 360, height: 480)
+        .frame(width: MiniPlayerWindowMetrics.compact.width, height: MiniPlayerWindowMetrics.compact.height)
 }

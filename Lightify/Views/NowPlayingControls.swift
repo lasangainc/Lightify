@@ -9,6 +9,7 @@ struct NowPlayingControls: View {
     @Environment(AppSession.self) private var appSession
     @Environment(PlaybackViewModel.self) private var playback
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var volumePopoverShown = false
     @State private var queuePopoverShown = false
     @State private var isCollapsed = false
@@ -155,7 +156,9 @@ struct NowPlayingControls: View {
             Button {
                 volumePopoverShown = false
                 queuePopoverShown = false
+                playback.dismissMiniPlayerLyricsPanel()
                 openWindow(id: MiniPlayerWindowScene.id)
+                dismissWindow(id: MainWindowScene.id)
             } label: {
                 Image(systemName: "pip.enter")
                     .font(.system(size: 14, weight: .medium))
@@ -273,6 +276,23 @@ struct NowPlayingControls: View {
 
     private var utilityCluster: some View {
         HStack(spacing: 8) {
+            Button {
+                volumePopoverShown = false
+                queuePopoverShown = false
+                guard playback.nowPlaying != nil else { return }
+                playback.presentMiniPlayerWithLyricsPanel()
+                openWindow(id: MiniPlayerWindowScene.id)
+                dismissWindow(id: MainWindowScene.id)
+            } label: {
+                Image(systemName: "quote.bubble")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(playback.nowPlaying == nil)
+            .opacity(playback.nowPlaying == nil ? 0.4 : 1)
+            .help("Lyrics")
+
             Button {
                 volumePopoverShown = false
                 queuePopoverShown.toggle()

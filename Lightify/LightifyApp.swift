@@ -11,7 +11,7 @@ struct LightifyApp: App {
     @State private var playback = PlaybackViewModel()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: MainWindowScene.id) {
             ContentView()
                 .environment(appSession)
                 .environment(playback)
@@ -31,6 +31,9 @@ struct LightifyApp: App {
         .restorationBehavior(.disabled)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
-        .defaultSize(width: 360, height: 520)
+        .defaultSize(
+            width: MiniPlayerWindowMetrics.compact.width,
+            height: MiniPlayerWindowMetrics.compact.height
+        )
     }
 }

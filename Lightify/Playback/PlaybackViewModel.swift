@@ -53,6 +53,17 @@ final class PlaybackViewModel {
     var queueError: String?
     var isLoadingQueue: Bool = false
 
+    /// When true, the mini player window uses the expanded split layout (player + lyrics). Set by the now playing bar lyrics control.
+    var miniPlayerShowsLyricsPanel: Bool = false
+
+    func presentMiniPlayerWithLyricsPanel() {
+        miniPlayerShowsLyricsPanel = true
+    }
+
+    func dismissMiniPlayerLyricsPanel() {
+        miniPlayerShowsLyricsPanel = false
+    }
+
     private weak var appSession: AppSession?
     private var engineStarted = false
     private var sdkStarted = false
@@ -118,6 +129,7 @@ final class PlaybackViewModel {
         playbackQueue = []
         queueError = nil
         isLoadingQueue = false
+        miniPlayerShowsLyricsPanel = false
         progressReferencePositionMs = 0
         progressReferenceDate = nil
     }
@@ -382,11 +394,14 @@ final class PlaybackViewModel {
         }
     }
 
+    /// How often the progress ticker runs while playing (drives `positionMs` for UI such as the scrubber).
+    static let progressTickerIntervalMs: UInt64 = 250
+
     private func startProgressTicker() {
         progressTickerTask?.cancel()
         progressTickerTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(250))
+                try? await Task.sleep(for: .milliseconds(Self.progressTickerIntervalMs))
                 guard let self, !Task.isCancelled else { break }
                 await MainActor.run {
                     self.refreshProgress()

@@ -473,6 +473,26 @@ struct SpotifyAPIClient: Sendable {
         return response.snapshot_id
     }
 
+    /// `DELETE /v1/playlists/{playlist_id}/items` — [Remove Playlist Items](https://developer.spotify.com/documentation/web-api/reference/remove-items-playlist).
+    /// - Note: Spotify removes **all** occurrences of each given track or episode URI from the playlist.
+    func removeItemsFromPlaylist(accessToken: String, playlistID: String, trackURIs: [String]) async throws {
+        guard !trackURIs.isEmpty else { return }
+        precondition(trackURIs.count <= 100, "Spotify docs: max 100 items per request")
+        struct ItemRef: Encodable {
+            let uri: String
+        }
+        struct Body: Encodable {
+            let items: [ItemRef]
+        }
+        let data = try JSONEncoder().encode(Body(items: trackURIs.map { ItemRef(uri: $0) }))
+        try await mutate(
+            url: endpointURL("playlists/\(playlistID)/items"),
+            accessToken: accessToken,
+            method: "DELETE",
+            jsonBody: data
+        )
+    }
+
     /// `PUT /v1/playlists/{playlist_id}/images` — [Add Custom Playlist Cover Image](https://developer.spotify.com/documentation/web-api/reference/upload-custom-playlist-cover).
     /// - Note: Request body is **base64-encoded JPEG** bytes as UTF-8; Spotify documents a **256 KB** maximum payload size.
     func uploadPlaylistCoverImage(accessToken: String, playlistID: String, jpegData: Data) async throws {

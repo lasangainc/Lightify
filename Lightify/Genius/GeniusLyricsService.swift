@@ -38,8 +38,12 @@ struct GeniusLyricsService: Sendable {
     }
 
     func fetchLyrics(title: String, artist: String) async throws -> String {
-        let artistT = artist.trimmingCharacters(in: .whitespacesAndNewlines)
-        let titleT = Self.normalizedTrackTitleForGenius(title.trimmingCharacters(in: .whitespacesAndNewlines))
+        let titleTrimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let (titleT, titleHadFeatCollaboratorSuffix) = Self.stripFeatCollaboratorSuffixes(from: titleTrimmed)
+        var artistT = Self.normalizedArtistForGenius(artist)
+        if titleHadFeatCollaboratorSuffix {
+            artistT = Self.firstCommaSeparatedArtistCredit(artistT)
+        }
         guard !artistT.isEmpty, !titleT.isEmpty else {
             throw GeniusLyricsError.noSearchResults
         }
@@ -149,15 +153,38 @@ struct GeniusLyricsService: Sendable {
     // MARK: - Direct URL (genius.com/Artist-song-lyrics)
 
     /// Strips common featured-artist suffixes so slugs match Genius URLs better.
-    private static func normalizedTrackTitleForGenius(_ title: String) -> String {
-        var t = title
-        let cutMarkers = [" (feat.", " (ft.", " (with ", " [feat.", " feat."]
+    /// `didStrip` is true when any marker matched (e.g. `"Like That (feat. …)"` → `"Like That"`).
+    private static func stripFeatCollaboratorSuffixes(from s: String) -> (String, didStrip: Bool) {
+        var t = s
+        var didStrip = false
+        let cutMarkers = [
+            " (feat.", " (featuring ", " (ft.", " (with ", " [feat.", " feat.",
+        ]
         for m in cutMarkers {
             if let r = t.range(of: m, options: .caseInsensitive) {
                 t = String(t[..<r.lowerBound])
+                didStrip = true
             }
         }
-        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (t.trimmingCharacters(in: .whitespacesAndNewlines), didStrip)
+    }
+
+    /// After removing `(feat. …)` from the title, Spotify still lists every artist (`"Doja Cat, Gucci Mane"`); Genius URLs use the headliner only.
+    private static func firstCommaSeparatedArtistCredit(_ artist: String) -> String {
+        guard let comma = artist.firstIndex(of: ",") else { return artist }
+        let head = artist[..<comma].trimmingCharacters(in: .whitespacesAndNewlines)
+        return head.isEmpty ? artist : head
+    }
+
+    /// Genius uses `-and-` in slugs for `+` between artists (e.g. `pinkpantheress-and-zara-larsson`); titles keep `+` as a word break (`stateside-zara-larsson`).
+    private static func normalizedArtistForGenius(_ artist: String) -> String {
+        let trimmed = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let withoutFeat = stripFeatCollaboratorSuffixes(from: trimmed).0
+        return withoutFeat
+            .components(separatedBy: "+")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " and ")
     }
 
     private static func geniusSlugSegment(_ raw: String) -> String {

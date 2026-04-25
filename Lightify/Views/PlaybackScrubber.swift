@@ -9,6 +9,9 @@ struct PlaybackScrubber: View {
     let positionMs: Int
     let durationMs: Int
     let isEnabled: Bool
+    /// Track / unfilled segment (mini player passes adaptive colors; main player keeps defaults).
+    var trackColor: Color = .white.opacity(0.14)
+    var progressColor: Color = Color("AccentColor")
     let onSeek: (Int) -> Void
 
     @State private var dragFraction: Double?
@@ -19,11 +22,11 @@ struct PlaybackScrubber: View {
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(.white.opacity(0.14))
+                    .fill(trackColor)
                     .frame(height: 3)
 
                 Capsule()
-                    .fill(Color("AccentColor").opacity(isEnabled ? 0.9 : 0.35))
+                    .fill(progressColor.opacity(isEnabled ? 0.9 : 0.35))
                     .frame(width: max(0, proxy.size.width * CGFloat(progressFraction)), height: 3)
             }
             .frame(maxHeight: .infinity, alignment: .center)

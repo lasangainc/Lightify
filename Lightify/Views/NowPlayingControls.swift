@@ -138,39 +138,40 @@ struct NowPlayingControls: View {
             }
     }
 
-    /// Collapse + mini player, one Liquid Glass chip. Height matches play control so the bar does not grow vertically.
+    /// Collapse + mini player. Stroked capsule only—nested `glassEffect` on the main bar reads muddy.
     private var transportLeadingGlassChip: some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 10) {
-                Button {
-                    withAnimation(Self.islandSpring) {
-                        isCollapsed = true
-                    }
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 14, weight: .semibold))
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(Self.islandSpring) {
+                    isCollapsed = true
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Minimize playback controls")
-
-                Button {
-                    volumePopoverShown = false
-                    queuePopoverShown = false
-                    playback.dismissMiniPlayerLyricsPanel()
-                    openWindow(id: MiniPlayerWindowScene.id)
-                    dismissWindow(id: MainWindowScene.id)
-                } label: {
-                    Image(systemName: "pip.enter")
-                        .font(.system(size: 14, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Open mini player")
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 14, weight: .semibold))
             }
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .glassEffect(.regular.interactive(), in: Capsule())
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Minimize playback controls")
+
+            Button {
+                volumePopoverShown = false
+                queuePopoverShown = false
+                playback.dismissMiniPlayerLyricsPanel()
+                openWindow(id: MiniPlayerWindowScene.id)
+                dismissWindow(id: MainWindowScene.id)
+            } label: {
+                Image(systemName: "pip.enter")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Open mini player")
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+        .overlay {
+            Capsule()
+                .strokeBorder(.secondary.opacity(0.28), lineWidth: 1)
         }
     }
 

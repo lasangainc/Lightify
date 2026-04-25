@@ -36,17 +36,20 @@ struct MiniPlayerWindowView: View {
     private static let symbolReplace = Animation.smooth(duration: 0.23)
     private static let artworkScaleAnimation = Animation.smooth(duration: 0.26)
 
-    private var useLightForeground: Bool {
-        guard let l = sampledTint?.luminance else { return false }
-        return l < 0.5
-    }
-
-    private var secondaryForeground: Color {
-        useLightForeground ? .white.opacity(0.72) : Color(white: 0.38)
+    /// Filled / stroked control capsules: solid surfaces, no material glass. Biased so only
+    /// clearly high-luminance artwork flips to dark chrome—avoids the bad light-on-light case in the mid band.
+    private var miniControlChrome: MiniPlayerControlChrome {
+        MiniPlayerControlChrome.from(luminance: sampledTint?.luminance)
     }
 
     private var controlTint: Color {
-        useLightForeground ? .white : Color("AccentColor")
+        miniControlChrome.sliderTint
+    }
+
+    /// Perceived light wash in `artworkWindowBackground` (kept independent of the control flip band).
+    private var radialWhiteOpacity: Double {
+        guard let l = sampledTint?.luminance else { return 0.18 }
+        return l < 0.5 ? 0.08 : 0.18
     }
 
     private var lyricsForeground: Color {
@@ -92,7 +95,7 @@ struct MiniPlayerWindowView: View {
             VStack(spacing: 14) {
                 artworkSection(side: 220)
 
-                GlassEffectContainer(spacing: 18) {
+                VStack(spacing: 18) {
                     playerChromeStack(spacing: 14)
                 }
             }
@@ -109,7 +112,7 @@ struct MiniPlayerWindowView: View {
             VStack(spacing: 14) {
                 artworkSection(side: 172)
 
-                GlassEffectContainer(spacing: 14) {
+                VStack(spacing: 14) {
                     playerChromeStack(spacing: 12)
                 }
             }
@@ -150,7 +153,9 @@ struct MiniPlayerWindowView: View {
                 PlaybackScrubber(
                     positionMs: np.positionMs,
                     durationMs: np.durationMs,
-                    isEnabled: playback.isWebPlayerReady
+                    isEnabled: playback.isWebPlayerReady,
+                    trackColor: miniControlChrome.scrubberTrack,
+                    progressColor: miniControlChrome.scrubberProgress
                 ) { positionMs in
                     playback.seek(to: positionMs)
                 }
@@ -178,7 +183,7 @@ struct MiniPlayerWindowView: View {
                 .overlay {
                     RadialGradient(
                         colors: [
-                            .white.opacity(useLightForeground ? 0.08 : 0.18),
+                            .white.opacity(radialWhiteOpacity),
                             .clear
                         ],
                         center: .center,
@@ -254,11 +259,11 @@ struct MiniPlayerWindowView: View {
             .overlay {
                 Image(systemName: "music.note")
                     .font(.system(size: 48, weight: .medium))
-                    .foregroundStyle(secondaryForeground)
+                    .foregroundStyle(miniControlChrome.primary.opacity(0.5))
             }
     }
 
-    /// Title + artist in Liquid Glass for legibility on any artwork-derived background.
+    /// Title + artist; colors follow `miniControlChrome` (no pill background).
     private var trackMetadataBubble: some View {
         VStack(spacing: 4) {
             if let np = playback.nowPlaying {
@@ -266,26 +271,25 @@ struct MiniPlayerWindowView: View {
                     .font(.headline.weight(.semibold))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(miniControlChrome.primary)
                 Text(np.artistName)
                     .font(.subheadline)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(miniControlChrome.secondary)
             } else {
                 Text("Lightify")
                     .font(.headline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(miniControlChrome.primary)
                 Text("Nothing playing")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(miniControlChrome.secondary)
             }
         }
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: true, vertical: true)
-        .padding(.vertical, 12)
-        .padding(.horizontal, 22)
-        .glassEffect(.regular, in: Capsule())
+        .padding(.vertical, 8)
+        .padding(.horizontal, 18)
     }
 
     private var transportBubble: some View {
@@ -341,7 +345,7 @@ struct MiniPlayerWindowView: View {
                 .buttonStyle(.plain)
                 .help("Next")
             }
-            .foregroundStyle(.primary)
+            .foregroundStyle(miniControlChrome.primary)
 
             Button {
                 if playback.repeatMode == .off {
@@ -361,13 +365,13 @@ struct MiniPlayerWindowView: View {
             .opacity(playback.nowPlaying == nil ? 0.4 : 1)
             .help(PlaybackTransportFormatting.repeatHelp(for: playback.repeatMode))
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 14)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
     }
 
     private var shuffleControlForeground: Color {
-        playback.shuffleEnabled ? .green : .primary
+        if playback.shuffleEnabled { return .green }
+        return miniControlChrome.primary
     }
 
     private var repeatModeSymbolName: String {
@@ -377,9 +381,9 @@ struct MiniPlayerWindowView: View {
     private var repeatControlForeground: Color {
         switch playback.repeatMode {
         case .off:
-            .primary
+            return miniControlChrome.primary
         case .context, .track:
-            .green
+            return .green
         }
     }
 
@@ -387,7 +391,7 @@ struct MiniPlayerWindowView: View {
         HStack(spacing: 10) {
             Image(systemName: volumeIconName)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.primary)
+                .foregroundStyle(miniControlChrome.primary)
                 .frame(width: 22, alignment: .center)
                 .contentTransition(.symbolEffect(.replace))
                 .animation(Self.symbolReplace, value: volumeIconName)
@@ -404,7 +408,7 @@ struct MiniPlayerWindowView: View {
 
             Text("\(Int(round(playback.playbackVolume * 100)))%")
                 .font(.caption.monospacedDigit().weight(.medium))
-                .foregroundStyle(.primary)
+                .foregroundStyle(miniControlChrome.primary)
                 .frame(minWidth: 32, alignment: .trailing)
 
             Button {
@@ -418,7 +422,7 @@ struct MiniPlayerWindowView: View {
             } label: {
                 Image(systemName: playback.miniPlayerShowsLyricsPanel ? "quote.bubble.fill" : "quote.bubble")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(miniControlChrome.primary)
                     .frame(width: 22, alignment: .center)
                     .symbolEffect(.bounce.down.byLayer, options: .nonRepeating, value: lyricsBounceTick)
             }
@@ -433,21 +437,58 @@ struct MiniPlayerWindowView: View {
             } label: {
                 Image(systemName: "pip.exit")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(miniControlChrome.primary)
                     .frame(width: 22, alignment: .center)
             }
             .buttonStyle(.plain)
             .help("Return to main window")
         }
-        .padding(.vertical, 10)
-        .padding(.leading, 12)
-        .padding(.trailing, 14)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .padding(.vertical, 6)
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
     }
 
     private var volumeIconName: String {
         PlaybackTransportFormatting.volumeSpeakerSymbolName(playbackVolume: playback.playbackVolume)
     }
+}
+
+// MARK: - Control chrome (pop-out player only; Genius attribution in lyrics keeps system glass)
+
+/// Control chrome: light-on-dark for almost all artwork; dark-on-light only when the sampled average is
+/// near-white (very high luminance), plus when there is no sample (window background reads light).
+private struct MiniPlayerControlChrome {
+    let primary: Color
+    let secondary: Color
+    let scrubberTrack: Color
+    let scrubberProgress: Color
+    let sliderTint: Color
+
+    static func from(luminance: CGFloat?) -> MiniPlayerControlChrome {
+        // No artwork tint: underPage-style background is usually light → dark chrome reads better.
+        guard let l = luminance else { return .darkOnLight }
+        // Only flip to dark chrome when the art average is clearly near-white (not mid pastels).
+        if l > 0.90 { return .darkOnLight }
+        return .lightOnDark
+    }
+
+    /// For dark, saturated artwork: light text/icons.
+    private static let lightOnDark = MiniPlayerControlChrome(
+        primary: .white,
+        secondary: .white.opacity(0.7),
+        scrubberTrack: .white.opacity(0.22),
+        scrubberProgress: Color("AccentColor"),
+        sliderTint: .white
+    )
+
+    /// For near-white art: dark labels and scrubber track for contrast on the gradient.
+    private static let darkOnLight = MiniPlayerControlChrome(
+        primary: Color(white: 0.1),
+        secondary: Color(white: 0.4),
+        scrubberTrack: Color(white: 0.0).opacity(0.2),
+        scrubberProgress: Color("AccentColor"),
+        sliderTint: Color("AccentColor")
+    )
 }
 
 #Preview {

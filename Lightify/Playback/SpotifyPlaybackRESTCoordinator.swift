@@ -16,9 +16,11 @@ enum SpotifyPlaybackRESTCoordinator {
     /// Returns `(accessToken, deviceId)` for calls that require a non-nil `device_id`.
     static func tokenAndWebDeviceId(
         appSession: AppSession?,
+        isWebPlayerReady: Bool,
         webPlayerDeviceId: String?
     ) async -> Result<(String, String), PrepFailure> {
         guard let appSession else { return .failure(.notSignedIn) }
+        guard isWebPlayerReady else { return .failure(.playerNotReady) }
         guard let deviceId = webPlayerDeviceId, !deviceId.isEmpty else {
             return .failure(.playerNotReady)
         }

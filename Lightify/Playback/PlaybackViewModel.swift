@@ -196,6 +196,7 @@ final class PlaybackViewModel {
         autoplayBlocked = false
         switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
             appSession: appSession,
+            isWebPlayerReady: isWebPlayerReady,
             webPlayerDeviceId: webPlayerDeviceId
         ) {
         case .failure(let failure):
@@ -222,6 +223,7 @@ final class PlaybackViewModel {
         autoplayBlocked = false
         switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
             appSession: appSession,
+            isWebPlayerReady: isWebPlayerReady,
             webPlayerDeviceId: webPlayerDeviceId
         ) {
         case .failure(let failure):
@@ -257,6 +259,7 @@ final class PlaybackViewModel {
         autoplayBlocked = false
         switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
             appSession: appSession,
+            isWebPlayerReady: isWebPlayerReady,
             webPlayerDeviceId: webPlayerDeviceId
         ) {
         case .failure(let failure):
@@ -330,6 +333,7 @@ final class PlaybackViewModel {
         clearPlayerFacingErrors()
         switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
             appSession: appSession,
+            isWebPlayerReady: isWebPlayerReady,
             webPlayerDeviceId: webPlayerDeviceId
         ) {
         case .failure(let failure):
@@ -349,6 +353,7 @@ final class PlaybackViewModel {
         clearPlayerFacingErrors()
         switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
             appSession: appSession,
+            isWebPlayerReady: isWebPlayerReady,
             webPlayerDeviceId: webPlayerDeviceId
         ) {
         case .failure(let failure):
@@ -451,6 +456,9 @@ final class PlaybackViewModel {
             clearPlayerFacingErrors()
         case .notReady:
             isWebPlayerReady = false
+            // Spotify invalidates the Web Playback device when the SDK goes not-ready; keeping the
+            // old id causes REST `me/player/play?device_id=…` to return 404 until a fresh `.ready`.
+            webPlayerDeviceId = nil
         case let .playerStateChanged(payload):
             if let incoming = payload {
                 notePossibleNaturalTrackEnd(from: lastWebPlaybackPayload, to: incoming)

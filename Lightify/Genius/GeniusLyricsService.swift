@@ -18,7 +18,7 @@ enum GeniusLyricsError: Error, LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .noSearchResults:
-            return "No Genius match for this track."
+            return "We couldn't find the lyrics for this one."
         case .emptyLyrics:
             return "Could not read lyrics from the Genius page."
         case .invalidResponse:

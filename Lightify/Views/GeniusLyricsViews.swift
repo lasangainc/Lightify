@@ -316,8 +316,8 @@ struct MiniPlayerLyricsPanel: View {
                 Text(message)
                     .font(.body)
                     .foregroundStyle(.white.opacity(0.72))
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(28)
             }
         }

@@ -367,7 +367,7 @@ struct MiniPlayerWindowView: View {
     }
 
     private var shuffleControlForeground: Color {
-        playback.shuffleEnabled ? .green : secondaryForeground
+        playback.shuffleEnabled ? .green : .primary
     }
 
     private var repeatModeSymbolName: String {
@@ -377,7 +377,7 @@ struct MiniPlayerWindowView: View {
     private var repeatControlForeground: Color {
         switch playback.repeatMode {
         case .off:
-            secondaryForeground
+            .primary
         case .context, .track:
             .green
         }

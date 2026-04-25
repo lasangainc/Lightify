@@ -225,7 +225,7 @@ struct GeniusLyricsLineByLineView: View {
                 .onPreferenceChange(LyricsLineMetricsKey.self) { metrics = $0 }
                 .background(Color.clear)
 
-                noTimeSyncFootnote
+                geniusAttributionFootnote
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.clear)
@@ -235,8 +235,8 @@ struct GeniusLyricsLineByLineView: View {
     }
 
     /// Liquid Glass chip via `glassEffect` / `regular`; non-interactive so the scroll view still receives drags.
-    private var noTimeSyncFootnote: some View {
-        Text("Time sync is unavailable, sorry!")
+    private var geniusAttributionFootnote: some View {
+        Text("Lyrics provided by Genius")
             .font(.system(size: 11, weight: .medium, design: .rounded))
             .foregroundStyle(.primary)
             .multilineTextAlignment(.center)

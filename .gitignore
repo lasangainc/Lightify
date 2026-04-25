@@ -1,0 +1,3 @@
+# Swift Package Manager — CreateRelease CLI (regenerate: cd Tools/CreateRelease && swift build -c release)
+Tools/CreateRelease/.build/
+Tools/CreateRelease/.swiftpm/

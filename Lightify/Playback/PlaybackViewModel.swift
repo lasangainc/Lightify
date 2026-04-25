@@ -10,6 +10,29 @@ import WebKit
 @MainActor
 @Observable
 final class PlaybackViewModel {
+    /// Matches Spotify Web Playback `repeat_mode` / Web API `state` for repeat.
+    enum ConnectRepeatMode: Int, Equatable {
+        case off = 0
+        case context = 1
+        case track = 2
+
+        var webAPIStateValue: String {
+            switch self {
+            case .off: "off"
+            case .context: "context"
+            case .track: "track"
+            }
+        }
+
+        var nextCycled: ConnectRepeatMode {
+            switch self {
+            case .off: .context
+            case .context: .track
+            case .track: .off
+            }
+        }
+    }
+
     struct NowPlaying: Equatable {
         let trackName: String
         let artistName: String
@@ -34,12 +57,9 @@ final class PlaybackViewModel {
 
     var nowPlaying: NowPlaying?
     var playerError: String?
-    /// Shown as its own alert (title + message) when the SDK has nothing to play.
-    private(set) var noSongQueuedPlaybackAlert: (title: String, message: String)?
 
     /// Clears playback-facing alerts (used when the user dismisses the combined playback alert).
     func acknowledgePlaybackIssueAlerts() {
-        noSongQueuedPlaybackAlert = nil
         playerError = nil
         autoplayBlocked = false
         queueError = nil
@@ -68,8 +88,19 @@ final class PlaybackViewModel {
     private var engineStarted = false
     private var sdkStarted = false
     private var progressTickerTask: Task<Void, Never>?
-    private var progressReferencePositionMs = 0
-    private var progressReferenceDate: Date?
+    /// Last raw Web Playback state (for detecting natural track end vs user pause).
+    private var lastWebPlaybackPayload: WebPlaybackStatePayload?
+    /// The SDK may emit `playback_error` right after a lone track ends; suppress briefly.
+    private var suppressBenignPlaybackErrorsUntil: Date?
+    /// Last known playback `position` from the SDK (or user seek), aligned with `progressClockAnchorMs`.
+    private var progressBasePositionMs = 0
+    /// Millisecond clock anchor: SDK `timestamp` when present, otherwise local wall time when the anchor was set.
+    private var progressClockAnchorMs: Int64?
+
+    /// Reflects Spotify session shuffle (from Web Playback state; toggled via Web API).
+    private(set) var shuffleEnabled: Bool = false
+    /// Reflects Spotify repeat mode (from Web Playback state; toggled via Web API).
+    private(set) var repeatMode: ConnectRepeatMode = .off
 
     init() {
         startProgressTicker()
@@ -103,7 +134,6 @@ final class PlaybackViewModel {
         do {
             try bridge.loadPlayerPage()
         } catch {
-            noSongQueuedPlaybackAlert = nil
             playerError = error.localizedDescription
         }
     }
@@ -111,7 +141,7 @@ final class PlaybackViewModel {
     /// Clears single-line `playerError` and the no-song alert before a new user-driven playback attempt or when the player becomes ready.
     private func clearPlayerFacingErrors() {
         playerError = nil
-        noSongQueuedPlaybackAlert = nil
+        suppressBenignPlaybackErrorsUntil = nil
     }
 
     func teardownWebPlayback() {
@@ -123,15 +153,18 @@ final class PlaybackViewModel {
         webPlayerDeviceId = nil
         nowPlaying = nil
         playerError = nil
-        noSongQueuedPlaybackAlert = nil
         autoplayBlocked = false
         playbackVolume = 0.85
         playbackQueue = []
         queueError = nil
         isLoadingQueue = false
         miniPlayerShowsLyricsPanel = false
-        progressReferencePositionMs = 0
-        progressReferenceDate = nil
+        progressBasePositionMs = 0
+        progressClockAnchorMs = nil
+        shuffleEnabled = false
+        repeatMode = .off
+        lastWebPlaybackPayload = nil
+        suppressBenignPlaybackErrorsUntil = nil
     }
 
     func playTrack(id: String) {
@@ -161,51 +194,53 @@ final class PlaybackViewModel {
     private func playTrackAsync(id: String) async {
         clearPlayerFacingErrors()
         autoplayBlocked = false
-        guard let appSession else {
-            playerError = AppSessionError.notSignedIn.localizedDescription
+        switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
+            appSession: appSession,
+            webPlayerDeviceId: webPlayerDeviceId
+        ) {
+        case .failure(let failure):
+            playerError = SpotifyPlaybackRESTCoordinator.playerErrorMessage(for: failure)
             return
-        }
-        guard let deviceId = webPlayerDeviceId else {
-            playerError = "Player is not ready yet. Wait a moment and try again."
-            return
-        }
-        bridge.activateElement()
-        do {
-            let token = try await appSession.validAccessToken()
-            try await playerAPI.startPlayback(
-                accessToken: token,
-                deviceId: deviceId,
-                uris: ["spotify:track:\(id)"],
-                contextURI: nil
-            )
-        } catch {
-            playerError = error.localizedDescription
+        case .success(let pair):
+            let (token, deviceId) = pair
+            bridge.activateElement()
+            do {
+                try await playerAPI.startPlayback(
+                    accessToken: token,
+                    deviceId: deviceId,
+                    uris: ["spotify:track:\(id)"],
+                    contextURI: nil
+                )
+            } catch {
+                playerError = error.localizedDescription
+            }
         }
     }
 
     private func playContextURIAsync(_ uri: String) async {
         clearPlayerFacingErrors()
         autoplayBlocked = false
-        guard let appSession else {
-            playerError = AppSessionError.notSignedIn.localizedDescription
+        switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
+            appSession: appSession,
+            webPlayerDeviceId: webPlayerDeviceId
+        ) {
+        case .failure(let failure):
+            playerError = SpotifyPlaybackRESTCoordinator.playerErrorMessage(for: failure)
             return
-        }
-        guard let deviceId = webPlayerDeviceId else {
-            playerError = "Player is not ready yet. Wait a moment and try again."
-            return
-        }
-        bridge.activateElement()
-        do {
-            let token = try await appSession.validAccessToken()
-            try await playerAPI.startPlayback(
-                accessToken: token,
-                deviceId: deviceId,
-                uris: nil,
-                contextURI: uri,
-                positionMs: nil
-            )
-        } catch {
-            playerError = error.localizedDescription
+        case .success(let pair):
+            let (token, deviceId) = pair
+            bridge.activateElement()
+            do {
+                try await playerAPI.startPlayback(
+                    accessToken: token,
+                    deviceId: deviceId,
+                    uris: nil,
+                    contextURI: uri,
+                    positionMs: nil
+                )
+            } catch {
+                playerError = error.localizedDescription
+            }
         }
     }
 
@@ -220,29 +255,30 @@ final class PlaybackViewModel {
         guard !trackIDs.isEmpty else { return }
         clearPlayerFacingErrors()
         autoplayBlocked = false
-        guard let appSession else {
-            playerError = AppSessionError.notSignedIn.localizedDescription
+        switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
+            appSession: appSession,
+            webPlayerDeviceId: webPlayerDeviceId
+        ) {
+        case .failure(let failure):
+            playerError = SpotifyPlaybackRESTCoordinator.playerErrorMessage(for: failure)
             return
-        }
-        guard let deviceId = webPlayerDeviceId else {
-            playerError = "Player is not ready yet. Wait a moment and try again."
-            return
-        }
-        bridge.activateElement()
-        // Web API accepts a limited number of track URIs per `PUT /me/player/play` body.
-        let capped = Array(trackIDs.prefix(Self.maxTrackURIsPerPlayRequest))
-        let uris = capped.map { "spotify:track:\($0)" }
-        do {
-            let token = try await appSession.validAccessToken()
-            try await playerAPI.startPlayback(
-                accessToken: token,
-                deviceId: deviceId,
-                uris: uris,
-                contextURI: nil,
-                positionMs: nil
-            )
-        } catch {
-            playerError = error.localizedDescription
+        case .success(let pair):
+            let (token, deviceId) = pair
+            bridge.activateElement()
+            // Web API accepts a limited number of track URIs per `PUT /me/player/play` body.
+            let capped = Array(trackIDs.prefix(Self.maxTrackURIsPerPlayRequest))
+            let uris = capped.map { "spotify:track:\($0)" }
+            do {
+                try await playerAPI.startPlayback(
+                    accessToken: token,
+                    deviceId: deviceId,
+                    uris: uris,
+                    contextURI: nil,
+                    positionMs: nil
+                )
+            } catch {
+                playerError = error.localizedDescription
+            }
         }
     }
 
@@ -273,9 +309,60 @@ final class PlaybackViewModel {
         let clamped = min(max(positionMs, 0), nowPlaying.durationMs)
         nowPlaying.positionMs = clamped
         self.nowPlaying = nowPlaying
-        progressReferencePositionMs = clamped
-        progressReferenceDate = nowPlaying.isPlaying ? Date() : nil
+        progressBasePositionMs = clamped
+        progressClockAnchorMs = nowPlaying.isPlaying ? Self.epochWallMs() : nil
         bridge.seek(to: clamped)
+    }
+
+    func setShuffleEnabled(_ enabled: Bool) {
+        Task {
+            await setShuffleEnabledAsync(enabled)
+        }
+    }
+
+    func cycleRepeatMode() {
+        Task {
+            await cycleRepeatModeAsync()
+        }
+    }
+
+    private func setShuffleEnabledAsync(_ enabled: Bool) async {
+        clearPlayerFacingErrors()
+        switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
+            appSession: appSession,
+            webPlayerDeviceId: webPlayerDeviceId
+        ) {
+        case .failure(let failure):
+            playerError = SpotifyPlaybackRESTCoordinator.playerErrorMessage(for: failure)
+            return
+        case .success(let pair):
+            let (token, deviceId) = pair
+            do {
+                try await playerAPI.setShuffleState(accessToken: token, enabled: enabled, deviceId: deviceId)
+            } catch {
+                playerError = error.localizedDescription
+            }
+        }
+    }
+
+    private func cycleRepeatModeAsync() async {
+        clearPlayerFacingErrors()
+        switch await SpotifyPlaybackRESTCoordinator.tokenAndWebDeviceId(
+            appSession: appSession,
+            webPlayerDeviceId: webPlayerDeviceId
+        ) {
+        case .failure(let failure):
+            playerError = SpotifyPlaybackRESTCoordinator.playerErrorMessage(for: failure)
+            return
+        case .success(let pair):
+            let (token, deviceId) = pair
+            let next = repeatMode.nextCycled
+            do {
+                try await playerAPI.setRepeatMode(accessToken: token, state: next.webAPIStateValue, deviceId: deviceId)
+            } catch {
+                playerError = error.localizedDescription
+            }
+        }
     }
 
     func refreshPlaybackQueue() async {
@@ -297,17 +384,55 @@ final class PlaybackViewModel {
         }
     }
 
-    private static let noSongQueuedAlertTitle = "No song to play!"
-    private static let noSongQueuedAlertMessage = "Please select a song"
+    /// Spotify sometimes reports the literal string “Playback error” when WebKit fails to take a
+    /// “WebKit Media Playback” RunningBoard assertion — third-party apps cannot add the internal
+    /// `com.apple.runningboard.assertions.webkit` entitlement; Console noise may not mean a user bug.
+    private static let genericWebKitSpotifyPlaybackFailure =
+        "The embedded Spotify player lost audio. This is often a temporary macOS / WebKit issue. Try pressing play again, or quit and reopen Lightify."
 
-    /// Spotify’s Web Playback SDK uses several wordings (e.g. “…Action” vs “…operation; no list was loaded.”).
-    private static func shouldPresentNoSongQueuedAlert(forPlaybackSDKMessage message: String) -> Bool {
+    private static func userFacingPlaybackSDKErrorMessage(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return genericWebKitSpotifyPlaybackFailure }
+        if trimmed.caseInsensitiveCompare("playback error") == .orderedSame {
+            return genericWebKitSpotifyPlaybackFailure
+        }
+        return raw
+    }
+
+    /// Messages Spotify’s Web Playback SDK emits when there is nothing to advance to (e.g. single track finished, empty `next_tracks`).
+    /// These are not user-actionable failures; surfacing them as “Playback” errors is misleading.
+    private static func isBenignEmptyQueueOrEndOfPlaybackSDKMessage(_ message: String) -> Bool {
         let lower = message.lowercased()
         if lower.contains("no list was loaded") { return true }
         if lower.contains("cannot perform") || lower.contains("can not perform") {
-            return lower.contains("action") || lower.contains("operation")
+            if lower.contains("action") || lower.contains("operation") { return true }
         }
+        if lower.contains("cannot skip") { return true }
+        if lower.contains("can not skip") { return true }
+        if lower.contains("nothing to skip") { return true }
         return false
+    }
+
+    private func notePossibleNaturalTrackEnd(from previous: WebPlaybackStatePayload?, to incoming: WebPlaybackStatePayload) {
+        guard let prev = previous,
+              let trackURI = incoming.currentTrack?.uri,
+              prev.currentTrack?.uri == trackURI,
+              !prev.paused,
+              incoming.paused,
+              incoming.repeatModeRaw == 0,
+              incoming.nextTracksCount == 0,
+              incoming.duration > 0
+        else { return }
+
+        let nearEnd = incoming.position >= max(incoming.duration - 3_000, 0)
+        // Some SDK versions emit a follow-up state with `position == 0` after a near-complete play (see spotify/web-playback-sdk#85).
+        let pausedAtZeroAfterNearComplete =
+            incoming.position == 0
+            && prev.position >= max(prev.duration - 3_000, 0)
+            && prev.position > 0
+        if nearEnd || pausedAtZeroAfterNearComplete {
+            suppressBenignPlaybackErrorsUntil = Date().addingTimeInterval(5)
+        }
     }
 
     private func handleBridgeEvent(_ event: SpotifyWebPlaybackBridge.BridgeEvent) {
@@ -318,7 +443,6 @@ final class PlaybackViewModel {
             bridge.startPlayer()
         case let .connectResult(success):
             if !success {
-                noSongQueuedPlaybackAlert = nil
                 playerError = "Could not connect Spotify Web Playback."
             }
         case let .ready(deviceId):
@@ -328,8 +452,13 @@ final class PlaybackViewModel {
         case .notReady:
             isWebPlayerReady = false
         case let .playerStateChanged(payload):
+            if let incoming = payload {
+                notePossibleNaturalTrackEnd(from: lastWebPlaybackPayload, to: incoming)
+            }
             if let payload {
                 playbackVolume = payload.volume
+                shuffleEnabled = payload.shuffle
+                repeatMode = ConnectRepeatMode(rawValue: payload.repeatModeRaw) ?? .off
                 if let track = payload.currentTrack {
                     let durationMs = max(payload.duration, 0)
                     let positionMs = min(max(payload.position, 0), durationMs)
@@ -344,8 +473,16 @@ final class PlaybackViewModel {
                         uri: track.uri,
                         contextURI: payload.contextURI
                     )
-                    progressReferencePositionMs = positionMs
-                    progressReferenceDate = payload.paused ? nil : Date()
+                    progressBasePositionMs = positionMs
+                    let canExtrapolateProgress =
+                        !payload.paused
+                        && track.isPlayable
+                        && durationMs > 0
+                    if canExtrapolateProgress {
+                        progressClockAnchorMs = payload.timestampMs ?? Self.epochWallMs()
+                    } else {
+                        progressClockAnchorMs = nil
+                    }
                     systemNowPlaying.update(
                         snapshot: .init(
                             trackURI: track.uri,
@@ -360,34 +497,41 @@ final class PlaybackViewModel {
                     )
                 } else {
                     nowPlaying = nil
-                    progressReferencePositionMs = 0
-                    progressReferenceDate = nil
+                    progressBasePositionMs = 0
+                    progressClockAnchorMs = nil
+                    shuffleEnabled = false
+                    repeatMode = .off
                     systemNowPlaying.clear()
                 }
             } else {
                 nowPlaying = nil
-                progressReferencePositionMs = 0
-                progressReferenceDate = nil
+                progressBasePositionMs = 0
+                progressClockAnchorMs = nil
+                shuffleEnabled = false
+                repeatMode = .off
                 systemNowPlaying.clear()
             }
+            lastWebPlaybackPayload = payload
         case .autoplayFailed:
             autoplayBlocked = true
-            noSongQueuedPlaybackAlert = nil
             playerError = "Playback was blocked by the browser. Try play/pause or pick a track again."
         case let .initializationError(msg),
              let .authenticationError(msg):
-            noSongQueuedPlaybackAlert = nil
             playerError = msg
         case let .playbackError(msg):
-            if Self.shouldPresentNoSongQueuedAlert(forPlaybackSDKMessage: msg) {
-                noSongQueuedPlaybackAlert = (Self.noSongQueuedAlertTitle, Self.noSongQueuedAlertMessage)
+            let nearEndedUI: Bool = {
+                guard let np = nowPlaying, !np.isPlaying, np.durationMs > 0, repeatMode == .off else { return false }
+                return np.positionMs >= np.durationMs - 3_000
+            }()
+            let benign = Self.isBenignEmptyQueueOrEndOfPlaybackSDKMessage(msg)
+                || (suppressBenignPlaybackErrorsUntil.map { Date() < $0 } ?? false)
+                || nearEndedUI
+            if benign {
                 playerError = nil
             } else {
-                noSongQueuedPlaybackAlert = nil
-                playerError = msg
+                playerError = Self.userFacingPlaybackSDKErrorMessage(msg)
             }
         case let .accountError(msg):
-            noSongQueuedPlaybackAlert = nil
             playerError = "Spotify Premium is required for Web Playback: \(msg)"
         case .log:
             break
@@ -413,14 +557,19 @@ final class PlaybackViewModel {
     private func refreshProgress() {
         guard var nowPlaying else { return }
         guard nowPlaying.isPlaying, nowPlaying.durationMs > 0 else { return }
-        guard let progressReferenceDate else { return }
+        guard let anchor = progressClockAnchorMs else { return }
 
-        let elapsedMs = max(0, Int(Date().timeIntervalSince(progressReferenceDate) * 1000))
-        let updatedPositionMs = min(nowPlaying.durationMs, progressReferencePositionMs + elapsedMs)
+        let nowMs = Self.epochWallMs()
+        let extrapolated = progressBasePositionMs + Int(nowMs - anchor)
+        let updatedPositionMs = min(max(extrapolated, 0), nowPlaying.durationMs)
         guard updatedPositionMs != nowPlaying.positionMs else { return }
 
         nowPlaying.positionMs = updatedPositionMs
         self.nowPlaying = nowPlaying
+    }
+
+    private static func epochWallMs() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1000)
     }
 
 }

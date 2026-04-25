@@ -59,6 +59,38 @@ struct SpotifyPlayerAPI: Sendable {
         try await putJSON(url, accessToken: accessToken, body: nil)
     }
 
+    /// `PUT /v1/me/player/shuffle` — [Set shuffle mode](https://developer.spotify.com/documentation/web-api/reference/toggle-shuffle-for-users-playback). `state` is required.
+    func setShuffleState(accessToken: String, enabled: Bool, deviceId: String?) async throws {
+        var components = URLComponents(url: endpointURL("me/player/shuffle"), resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "state", value: enabled ? "true" : "false"),
+        ]
+        if let deviceId {
+            items.append(URLQueryItem(name: "device_id", value: deviceId))
+        }
+        components.queryItems = items
+        guard let url = components.url else {
+            throw SpotifyAPIError.http(-1, nil)
+        }
+        try await putJSON(url, accessToken: accessToken, body: nil)
+    }
+
+    /// `PUT /v1/me/player/repeat` — [Set repeat mode](https://developer.spotify.com/documentation/web-api/reference/set-repeat-mode-on-users-playback). `state` is `track`, `context`, or `off`.
+    func setRepeatMode(accessToken: String, state: String, deviceId: String?) async throws {
+        var components = URLComponents(url: endpointURL("me/player/repeat"), resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "state", value: state),
+        ]
+        if let deviceId {
+            items.append(URLQueryItem(name: "device_id", value: deviceId))
+        }
+        components.queryItems = items
+        guard let url = components.url else {
+            throw SpotifyAPIError.http(-1, nil)
+        }
+        try await putJSON(url, accessToken: accessToken, body: nil)
+    }
+
     private func putJSON(_ url: URL, accessToken: String, body: [String: Any]?) async throws {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"

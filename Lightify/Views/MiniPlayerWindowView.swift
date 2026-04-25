@@ -28,11 +28,12 @@ struct MiniPlayerWindowView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var skipBackBounceTick = 0
     @State private var skipForwardBounceTick = 0
+    @State private var shuffleBounceTick = 0
+    @State private var repeatBounceTick = 0
     @State private var lyricsBounceTick = 0
     @State private var sampledTint: (color: Color, gradientEnd: Color, luminance: CGFloat)?
 
     private static let symbolReplace = Animation.smooth(duration: 0.23)
-    private static let playPauseSymbolReplace = Animation.spring(response: 0.16, dampingFraction: 0.52)
     private static let artworkScaleAnimation = Animation.smooth(duration: 0.26)
 
     private var useLightForeground: Bool {
@@ -96,15 +97,15 @@ struct MiniPlayerWindowView: View {
                 }
             }
             .padding(20)
-            .padding(.top, 12)
-            .frame(minWidth: 300, idealWidth: 320, maxWidth: 380)
+            .frame(minWidth: 300, idealWidth: 320, maxWidth: 380, maxHeight: .infinity, alignment: .center)
             Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Wide layout: controls + artwork on the left, fetched lyrics (line-by-line) on the right.
     private var expandedPlayerWithLyricsLayout: some View {
-        HStack(alignment: .top, spacing: 44) {
+        HStack(alignment: .center, spacing: 44) {
             VStack(spacing: 14) {
                 artworkSection(side: 172)
 
@@ -112,14 +113,15 @@ struct MiniPlayerWindowView: View {
                     playerChromeStack(spacing: 12)
                 }
             }
-            .frame(width: 356, alignment: .top)
+            .frame(width: 356)
+            .frame(maxHeight: .infinity, alignment: .center)
             .padding(.leading, 28)
             .padding(.vertical, 22)
 
             lyricsColumn
         }
         .padding(.trailing, 26)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var lyricsColumn: some View {
@@ -287,46 +289,98 @@ struct MiniPlayerWindowView: View {
     }
 
     private var transportBubble: some View {
-        HStack(spacing: 22) {
+        HStack(spacing: 14) {
             Button {
-                skipBackBounceTick &+= 1
-                playback.previous()
+                if !playback.shuffleEnabled {
+                    shuffleBounceTick &+= 1
+                }
+                playback.setShuffleEnabled(!playback.shuffleEnabled)
             } label: {
-                Image(systemName: "backward.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .symbolEffect(.bounce, value: skipBackBounceTick)
+                Image(systemName: "shuffle")
+                    .font(.system(size: 16, weight: .semibold))
+                    .symbolEffect(.bounce, value: shuffleBounceTick)
             }
             .buttonStyle(.plain)
-            .help("Previous")
+            .foregroundStyle(shuffleControlForeground)
+            .disabled(!playback.isWebPlayerReady || playback.nowPlaying == nil)
+            .opacity(playback.nowPlaying == nil ? 0.4 : 1)
+            .help(playback.shuffleEnabled ? "Shuffle on" : "Shuffle off")
+
+            Group {
+                Button {
+                    skipBackBounceTick &+= 1
+                    playback.previous()
+                } label: {
+                    Image(systemName: "backward.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .symbolEffect(.bounce, value: skipBackBounceTick)
+                }
+                .buttonStyle(.plain)
+                .help("Previous")
+
+                Button {
+                    playback.playPause()
+                } label: {
+                    Image(systemName: (playback.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .symbolEffect(.bounce, value: playback.nowPlaying?.isPlaying ?? false)
+                        .islandPlayPauseSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false)
+                }
+                .buttonStyle(.plain)
+                .help((playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play")
+
+                Button {
+                    skipForwardBounceTick &+= 1
+                    playback.next()
+                } label: {
+                    Image(systemName: "forward.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .symbolEffect(.bounce, value: skipForwardBounceTick)
+                }
+                .buttonStyle(.plain)
+                .help("Next")
+            }
+            .foregroundStyle(.primary)
 
             Button {
-                playback.playPause()
+                if playback.repeatMode == .off {
+                    repeatBounceTick &+= 1
+                }
+                playback.cycleRepeatMode()
             } label: {
-                Image(systemName: (playback.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
-                    .font(.system(size: 28, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .symbolEffect(.bounce, value: playback.nowPlaying?.isPlaying ?? false)
-                    .contentTransition(.symbolEffect(.replace.offUp.byLayer, options: .nonRepeating))
-                    .animation(Self.playPauseSymbolReplace, value: playback.nowPlaying?.isPlaying ?? false)
+                Image(systemName: repeatModeSymbolName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .symbolEffect(.bounce, value: repeatBounceTick)
+                    .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp.byLayer), options: .nonRepeating))
+                    .animation(Self.symbolReplace, value: repeatModeSymbolName)
             }
             .buttonStyle(.plain)
-            .help((playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play")
-
-            Button {
-                skipForwardBounceTick &+= 1
-                playback.next()
-            } label: {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .symbolEffect(.bounce, value: skipForwardBounceTick)
-            }
-            .buttonStyle(.plain)
-            .help("Next")
+            .foregroundStyle(repeatControlForeground)
+            .disabled(!playback.isWebPlayerReady || playback.nowPlaying == nil)
+            .opacity(playback.nowPlaying == nil ? 0.4 : 1)
+            .help(PlaybackTransportFormatting.repeatHelp(for: playback.repeatMode))
         }
-        .foregroundStyle(.primary)
         .padding(.vertical, 10)
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 14)
         .glassEffect(.regular.interactive(), in: Capsule())
+    }
+
+    private var shuffleControlForeground: Color {
+        playback.shuffleEnabled ? .green : secondaryForeground
+    }
+
+    private var repeatModeSymbolName: String {
+        PlaybackTransportFormatting.repeatSymbolName(for: playback.repeatMode)
+    }
+
+    private var repeatControlForeground: Color {
+        switch playback.repeatMode {
+        case .off:
+            secondaryForeground
+        case .context, .track:
+            .green
+        }
     }
 
     private var volumeBubble: some View {
@@ -392,17 +446,7 @@ struct MiniPlayerWindowView: View {
     }
 
     private var volumeIconName: String {
-        let v = playback.playbackVolume
-        if v <= 0.001 {
-            return "speaker.slash.fill"
-        }
-        if v < 0.34 {
-            return "speaker.wave.1.fill"
-        }
-        if v < 0.67 {
-            return "speaker.wave.2.fill"
-        }
-        return "speaker.wave.3.fill"
+        PlaybackTransportFormatting.volumeSpeakerSymbolName(playbackVolume: playback.playbackVolume)
     }
 }
 

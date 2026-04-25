@@ -9,17 +9,9 @@ import SwiftUI
 private struct PlaybackIssueAlertsModifier: ViewModifier {
     @Environment(PlaybackViewModel.self) private var playback
 
-    private var alertTitle: String {
-        if let noSong = playback.noSongQueuedPlaybackAlert {
-            return noSong.title
-        }
-        return "Playback"
-    }
+    private var alertTitle: String { "Playback" }
 
     private var alertMessage: String {
-        if let noSong = playback.noSongQueuedPlaybackAlert {
-            return noSong.message
-        }
         if let e = playback.playerError { return e }
         if playback.autoplayBlocked {
             return "Autoplay blocked — tap play or pick a track"
@@ -31,8 +23,7 @@ private struct PlaybackIssueAlertsModifier: ViewModifier {
     private var alertPresented: Binding<Bool> {
         Binding(
             get: {
-                playback.noSongQueuedPlaybackAlert != nil
-                    || playback.playerError != nil
+                playback.playerError != nil
                     || playback.autoplayBlocked
                     || playback.queueError != nil
             },

@@ -35,6 +35,11 @@ final class SpotifyWebPlaybackBridge: NSObject {
     override init() {
         let config = WKWebViewConfiguration()
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        // Let the Spotify Web Playback SDK start audio without an extra user gesture on top of our
+        // existing activate/play flow. Helps avoid flaky WebKit “media playback” / RBS assertion paths.
+        if #available(macOS 10.12, *) {
+            config.mediaTypesRequiringUserActionForPlayback = []
+        }
         if #available(macOS 11.0, *) {
             config.defaultWebpagePreferences.allowsContentJavaScript = true
         }

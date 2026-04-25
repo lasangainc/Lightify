@@ -15,14 +15,13 @@ struct NowPlayingControls: View {
     @State private var isCollapsed = false
     @State private var skipBackBounceTick = 0
     @State private var skipForwardBounceTick = 0
+    @State private var shuffleBarBounceTick = 0
+    @State private var repeatBarBounceTick = 0
 
     /// Slightly under-damped for a short bounce on collapse/expand.
     private static let islandSpring = Animation.spring(response: 0.42, dampingFraction: 0.62)
 
     private static let islandSymbolReplace = Animation.smooth(duration: 0.23)
-
-    /// Drives the layered replace transition when play ↔ pause changes.
-    private static let playPauseSymbolReplace = Animation.spring(response: 0.16, dampingFraction: 0.52)
 
     var body: some View {
         HStack(spacing: 0) {
@@ -86,7 +85,7 @@ struct NowPlayingControls: View {
                     .font(.system(size: 20, weight: .semibold))
                     .frame(width: 28, height: 28)
                     .symbolEffect(.bounce, value: playback.nowPlaying?.isPlaying ?? false)
-                    .islandPlayPauseSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false, animation: Self.playPauseSymbolReplace)
+                    .islandPlayPauseSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false)
             }
             .buttonStyle(.plain)
             .help((playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play")
@@ -139,70 +138,131 @@ struct NowPlayingControls: View {
             }
     }
 
+    /// Collapse + mini player, one Liquid Glass chip. Height matches play control so the bar does not grow vertically.
+    private var transportLeadingGlassChip: some View {
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(Self.islandSpring) {
+                        isCollapsed = true
+                    }
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Minimize playback controls")
+
+                Button {
+                    volumePopoverShown = false
+                    queuePopoverShown = false
+                    playback.dismissMiniPlayerLyricsPanel()
+                    openWindow(id: MiniPlayerWindowScene.id)
+                    dismissWindow(id: MainWindowScene.id)
+                } label: {
+                    Image(systemName: "pip.enter")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Open mini player")
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .glassEffect(.regular.interactive(), in: Capsule())
+        }
+    }
+
     private var transportCluster: some View {
         HStack(spacing: 14) {
-            Button {
-                withAnimation(Self.islandSpring) {
-                    isCollapsed = true
-                }
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .semibold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Minimize playback controls")
-
-            Button {
-                volumePopoverShown = false
-                queuePopoverShown = false
-                playback.dismissMiniPlayerLyricsPanel()
-                openWindow(id: MiniPlayerWindowScene.id)
-                dismissWindow(id: MainWindowScene.id)
-            } label: {
-                Image(systemName: "pip.enter")
-                    .font(.system(size: 14, weight: .medium))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Open mini player")
+            transportLeadingGlassChip
 
             Group {
                 Button {
-                    skipBackBounceTick &+= 1
-                    playback.previous()
+                    if !playback.shuffleEnabled {
+                        shuffleBarBounceTick &+= 1
+                    }
+                    playback.setShuffleEnabled(!playback.shuffleEnabled)
                 } label: {
-                    Image(systemName: "backward.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .symbolEffect(.bounce, value: skipBackBounceTick)
+                    Image(systemName: "shuffle")
+                        .font(.system(size: 14, weight: .semibold))
+                        .symbolEffect(.bounce, value: shuffleBarBounceTick)
                 }
                 .buttonStyle(.plain)
-                .help("Previous")
+                .foregroundStyle(playback.shuffleEnabled ? Color.green : Color.secondary)
+                .disabled(!playback.isWebPlayerReady || playback.nowPlaying == nil)
+                .opacity(playback.nowPlaying == nil ? 0.4 : 1)
+                .help(playback.shuffleEnabled ? "Shuffle on" : "Shuffle off")
+
+                Group {
+                    Button {
+                        skipBackBounceTick &+= 1
+                        playback.previous()
+                    } label: {
+                        Image(systemName: "backward.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .symbolEffect(.bounce, value: skipBackBounceTick)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Previous")
+
+                    Button {
+                        playback.playPause()
+                    } label: {
+                        Image(systemName: (playback.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
+                            .font(.system(size: 22, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                            .symbolEffect(.bounce, value: playback.nowPlaying?.isPlaying ?? false)
+                            .islandPlayPauseSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false)
+                    }
+                    .buttonStyle(.plain)
+                    .help((playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play")
+
+                    Button {
+                        skipForwardBounceTick &+= 1
+                        playback.next()
+                    } label: {
+                        Image(systemName: "forward.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .symbolEffect(.bounce, value: skipForwardBounceTick)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Next")
+                }
+                .foregroundStyle(.primary)
 
                 Button {
-                    playback.playPause()
+                    if playback.repeatMode == .off {
+                        repeatBarBounceTick &+= 1
+                    }
+                    playback.cycleRepeatMode()
                 } label: {
-                    Image(systemName: (playback.nowPlaying?.isPlaying ?? false) ? "pause.fill" : "play.fill")
-                        .font(.system(size: 22, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                        .symbolEffect(.bounce, value: playback.nowPlaying?.isPlaying ?? false)
-                        .islandPlayPauseSymbolReplace(value: playback.nowPlaying?.isPlaying ?? false, animation: Self.playPauseSymbolReplace)
+                    Image(systemName: nowPlayingBarRepeatSymbolName)
+                        .font(.system(size: 14, weight: .semibold))
+                        .symbolEffect(.bounce, value: repeatBarBounceTick)
+                        .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp.byLayer), options: .nonRepeating))
+                        .animation(Self.islandSymbolReplace, value: nowPlayingBarRepeatSymbolName)
                 }
                 .buttonStyle(.plain)
-                .help((playback.nowPlaying?.isPlaying ?? false) ? "Pause" : "Play")
-
-                Button {
-                    skipForwardBounceTick &+= 1
-                    playback.next()
-                } label: {
-                    Image(systemName: "forward.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .symbolEffect(.bounce, value: skipForwardBounceTick)
-                }
-                .buttonStyle(.plain)
-                .help("Next")
+                .foregroundStyle(nowPlayingBarRepeatForeground)
+                .disabled(!playback.isWebPlayerReady || playback.nowPlaying == nil)
+                .opacity(playback.nowPlaying == nil ? 0.4 : 1)
+                .help(PlaybackTransportFormatting.repeatHelp(for: playback.repeatMode))
             }
-            .foregroundStyle(.primary)
+        }
+    }
+
+    private var nowPlayingBarRepeatSymbolName: String {
+        PlaybackTransportFormatting.repeatSymbolName(for: playback.repeatMode)
+    }
+
+    private var nowPlayingBarRepeatForeground: Color {
+        switch playback.repeatMode {
+        case .off:
+            .secondary
+        case .context, .track:
+            .green
         }
     }
 
@@ -381,17 +441,7 @@ struct NowPlayingControls: View {
     }
 
     private var volumeIconName: String {
-        let v = playback.playbackVolume
-        if v <= 0.001 {
-            return "speaker.slash.fill"
-        }
-        if v < 0.34 {
-            return "speaker.wave.1.fill"
-        }
-        if v < 0.67 {
-            return "speaker.wave.2.fill"
-        }
-        return "speaker.wave.3.fill"
+        PlaybackTransportFormatting.volumeSpeakerSymbolName(playbackVolume: playback.playbackVolume)
     }
 }
 
@@ -458,12 +508,6 @@ private extension View {
     func islandSymbolReplace<V: Equatable>(value: V, animation: Animation) -> some View {
         self
             .contentTransition(.symbolEffect(.replace))
-            .animation(animation, value: value)
-    }
-
-    func islandPlayPauseSymbolReplace<V: Equatable>(value: V, animation: Animation) -> some View {
-        self
-            .contentTransition(.symbolEffect(.replace.offUp.byLayer, options: .nonRepeating))
             .animation(animation, value: value)
     }
 }

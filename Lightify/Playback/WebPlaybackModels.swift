@@ -11,8 +11,15 @@ struct WebPlaybackStatePayload: Equatable {
     let position: Int
     let duration: Int
     let volume: Double
+    /// Milliseconds since Unix epoch when `position` was sampled (drives accurate progress between events).
+    let timestampMs: Int64?
+    /// `repeat_mode` from the SDK: 0 = off, 1 = context, 2 = track.
+    let repeatModeRaw: Int
+    let shuffle: Bool
     /// From `context.uri` when playing in an album, playlist, or artist context.
     let contextURI: String?
+    /// Count of `track_window.next_tracks` (Spotify may try to advance when this is 0 and emit a benign `playback_error`).
+    let nextTracksCount: Int
     let currentTrack: WebPlaybackTrackPayload?
 
     init(dictionary: [String: Any]) {
@@ -20,19 +27,31 @@ struct WebPlaybackStatePayload: Equatable {
         let position: Int = Self.intValue(dictionary["position"])
         let duration: Int = Self.intValue(dictionary["duration"])
         let volume = Self.doubleValue(dictionary["volume"], default: 0.85)
+        let timestampMs = Self.int64Value(dictionary["timestamp"])
+        let repeatModeRaw = Self.intValue(dictionary["repeat_mode"])
+        let shuffle = dictionary["shuffle"] as? Bool ?? false
         let contextURI = (dictionary["context"] as? [String: Any])?["uri"] as? String
         var track: WebPlaybackTrackPayload?
-        if let tw = dictionary["track_window"] as? [String: Any],
-           let ct = tw["current_track"] as? [String: Any],
-           let parsed = WebPlaybackTrackPayload(dictionary: ct)
-        {
-            track = parsed
+        var nextTracksCount = 0
+        if let tw = dictionary["track_window"] as? [String: Any] {
+            if let ct = tw["current_track"] as? [String: Any],
+               let parsed = WebPlaybackTrackPayload(dictionary: ct)
+            {
+                track = parsed
+            }
+            if let next = tw["next_tracks"] as? [Any] {
+                nextTracksCount = next.count
+            }
         }
         self.paused = paused
         self.position = position
         self.duration = duration
         self.volume = volume
+        self.timestampMs = timestampMs
+        self.repeatModeRaw = repeatModeRaw
+        self.shuffle = shuffle
         self.contextURI = contextURI
+        self.nextTracksCount = nextTracksCount
         self.currentTrack = track
     }
 
@@ -63,6 +82,21 @@ struct WebPlaybackStatePayload: Equatable {
             return 0
         }
     }
+
+    private static func int64Value(_ any: Any?) -> Int64? {
+        switch any {
+        case let i as Int:
+            return Int64(i)
+        case let i64 as Int64:
+            return i64
+        case let d as Double:
+            return Int64(d)
+        case let n as NSNumber:
+            return n.int64Value
+        default:
+            return nil
+        }
+    }
 }
 
 struct WebPlaybackTrackPayload: Equatable {
@@ -72,6 +106,7 @@ struct WebPlaybackTrackPayload: Equatable {
     /// Best-effort album cover from Web Playback `album.images` (largest width).
     let artworkURL: URL?
     let uri: String?
+    let isPlayable: Bool
 
     /// `spotify:track:…` id for REST fallback when `artworkURL` is missing.
     var spotifyTrackId: String? {
@@ -98,11 +133,13 @@ struct WebPlaybackTrackPayload: Equatable {
         let albumDict = dictionary["album"] as? [String: Any]
         let albumName = albumDict?["name"] as? String
         let artworkURL = Self.bestArtworkURL(from: albumDict)
+        let isPlayable = dictionary["is_playable"] as? Bool ?? true
         self.name = name
         self.artistNames = artists.joined(separator: ", ")
         self.albumName = albumName
         self.artworkURL = artworkURL
         self.uri = uri
+        self.isPlayable = isPlayable
     }
 
     private static func bestArtworkURL(from album: [String: Any]?) -> URL? {

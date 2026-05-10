@@ -169,20 +169,15 @@ private struct LyricsLineMetricsKey: PreferenceKey {
     }
 }
 
-// MARK: - LRCLIB attribution
+// MARK: - Minimal placeholders
 
-private struct LRCLIBAttributionChip: View {
+private struct NoLyricsPlaceholder: View {
     var body: some View {
-        Text("Lyrics from LRCLIB")
-            .font(.system(size: 11, weight: .medium, design: .rounded))
-            .foregroundStyle(.primary)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .padding(.horizontal, 20)
-            .padding(.bottom, 10)
-            .allowsHitTesting(false)
+        Text("...")
+            .font(.system(size: 32, weight: .regular, design: .default))
+            .foregroundStyle(.white.opacity(0.45))
+            .tracking(2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -204,65 +199,60 @@ struct PlainLyricsLineByLineView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack(alignment: .bottom) {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 22) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            lyricLine(line, index: index)
-                        }
-                    }
-                    .padding(.horizontal, 36)
-                    .padding(.vertical, max(proxy.size.height * 0.3, 120))
-                }
-                .coordinateSpace(name: "LyricsScrollSpace")
-                .background {
-                    GeometryReader { scrollProxy in
-                        Color.clear
-                            .preference(
-                                key: LyricsViewportMidYKey.self,
-                                value: scrollProxy.frame(in: .named("LyricsScrollSpace")).midY
-                            )
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 26) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                        lyricLine(line, index: index)
                     }
                 }
-                .mask {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .white.opacity(0.72), location: 0.12),
-                            .init(color: .white, location: 0.34),
-                            .init(color: .white, location: 0.66),
-                            .init(color: .white.opacity(0.72), location: 0.88),
-                            .init(color: .clear, location: 1)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-                .onPreferenceChange(LyricsViewportMidYKey.self) { viewportMidY = $0 }
-                .onPreferenceChange(LyricsLineMetricsKey.self) { metrics = $0 }
-                .background(Color.clear)
-
-                LRCLIBAttributionChip()
+                .padding(.horizontal, 28)
+                .padding(.vertical, max(proxy.size.height * 0.3, 120))
             }
+            .coordinateSpace(name: "LyricsScrollSpace")
+            .background {
+                GeometryReader { scrollProxy in
+                    Color.clear
+                        .preference(
+                            key: LyricsViewportMidYKey.self,
+                            value: scrollProxy.frame(in: .named("LyricsScrollSpace")).midY
+                        )
+                }
+            }
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .white.opacity(0.85), location: 0.08),
+                        .init(color: .white, location: 0.22),
+                        .init(color: .white, location: 0.78),
+                        .init(color: .white.opacity(0.85), location: 0.92),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .onPreferenceChange(LyricsViewportMidYKey.self) { viewportMidY = $0 }
+            .onPreferenceChange(LyricsLineMetricsKey.self) { metrics = $0 }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.clear)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.clear)
     }
 
     private func lyricLine(_ line: String, index: Int) -> some View {
         let emphasis = emphasisForLine(at: index)
+        let fontSize: CGFloat = 17 + (emphasis * 5)
+        let blurRadius: CGFloat = emphasis > 0.72 ? 0 : min(14, 3.5 + (1 - emphasis) * 16)
+        let opacity: CGFloat = 0.22 + (emphasis * 0.78)
         return Text(LyricsDisplayFormat.attributedLine(line))
-            .font(.system(size: 19 + (emphasis * 9), weight: emphasis > 0.78 ? .bold : .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.18 + (emphasis * 0.82)))
+            .font(.system(size: fontSize, weight: emphasis > 0.75 ? .semibold : .regular, design: .default))
+            .foregroundStyle(.white.opacity(Double(opacity)))
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-            .scaleEffect(0.97 + (emphasis * 0.05), anchor: .leading)
-            .blur(radius: emphasis < 0.18 ? 0.6 : 0)
-            .animation(.smooth(duration: 0.16), value: emphasis)
+            .blur(radius: blurRadius)
+            .animation(.smooth(duration: 0.18), value: emphasis)
             .background {
                 GeometryReader { lineProxy in
                     Color.clear.preference(
@@ -295,7 +285,6 @@ struct PlainLyricsLineByLineView: View {
 struct SyncedLyricsScrollView: View {
     let lines: [SyncedLyricLine]
     let positionMs: Int
-    let isPlaying: Bool
 
     private static let scrollSpring = Animation.spring(duration: 0.52, bounce: 0.22)
 
@@ -322,54 +311,48 @@ struct SyncedLyricsScrollView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack(alignment: .bottom) {
-                ScrollViewReader { scrollProxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVStack(alignment: .leading, spacing: 20) {
-                            ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
-                                SyncedLyricLineView(
-                                    line: line,
-                                    rankDistance: abs(idx - activeIndex),
-                                    isCurrent: idx == activeIndex,
-                                    isPlaying: isPlaying
-                                )
-                                .id(line.id)
-                            }
-                        }
-                        .padding(.horizontal, 32)
-                        .padding(.vertical, max(proxy.size.height * 0.28, 100))
-                    }
-                    .coordinateSpace(name: "SyncedLyricsSpace")
-                    .mask {
-                        LinearGradient(
-                            stops: [
-                                .init(color: .clear, location: 0),
-                                .init(color: .white.opacity(0.7), location: 0.1),
-                                .init(color: .white, location: 0.32),
-                                .init(color: .white, location: 0.68),
-                                .init(color: .white.opacity(0.7), location: 0.9),
-                                .init(color: .clear, location: 1)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    }
-                    .onChange(of: activeIndex) { _, newIdx in
-                        guard lines.indices.contains(newIdx) else { return }
-                        withAnimation(Self.scrollSpring) {
-                            scrollProxy.scrollTo(lines[newIdx].id, anchor: UnitPoint(x: 0.5, y: 0.34))
+            ScrollViewReader { scrollProxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(alignment: .leading, spacing: 26) {
+                        ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
+                            SyncedLyricLineView(
+                                line: line,
+                                rankDistance: abs(idx - activeIndex),
+                                isCurrent: idx == activeIndex
+                            )
+                            .id(line.id)
                         }
                     }
-                    .onAppear {
-                        let idx = activeIndex
-                        guard lines.indices.contains(idx) else { return }
-                        DispatchQueue.main.async {
-                            scrollProxy.scrollTo(lines[idx].id, anchor: UnitPoint(x: 0.5, y: 0.34))
-                        }
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, max(proxy.size.height * 0.28, 100))
+                }
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(0.88), location: 0.08),
+                            .init(color: .white, location: 0.2),
+                            .init(color: .white, location: 0.8),
+                            .init(color: .white.opacity(0.88), location: 0.92),
+                            .init(color: .clear, location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+                .onChange(of: activeIndex) { _, newIdx in
+                    guard lines.indices.contains(newIdx) else { return }
+                    withAnimation(Self.scrollSpring) {
+                        scrollProxy.scrollTo(lines[newIdx].id, anchor: UnitPoint(x: 0.5, y: 0.34))
                     }
                 }
-
-                LRCLIBAttributionChip()
+                .onAppear {
+                    let idx = activeIndex
+                    guard lines.indices.contains(idx) else { return }
+                    DispatchQueue.main.async {
+                        scrollProxy.scrollTo(lines[idx].id, anchor: UnitPoint(x: 0.5, y: 0.34))
+                    }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -381,72 +364,38 @@ private struct SyncedLyricLineView: View {
     let line: SyncedLyricLine
     let rankDistance: Int
     let isCurrent: Bool
-    let isPlaying: Bool
 
-    private var depthFade: CGFloat {
-        let d = CGFloat(min(rankDistance, 12))
-        return pow(max(0, 1 - d * 0.085), 1.15)
+    private var displayText: String {
+        LyricsDisplayFormat.stripRoundParentheticals(line.text)
     }
 
-    private var attributed: AttributedString {
-        LyricsDisplayFormat.attributedLine(line.text)
+    /// Softer lines further from the active lyric (reference-style depth).
+    private var inactiveBlur: CGFloat {
+        guard !isCurrent else { return 0 }
+        let d = CGFloat(min(rankDistance, 10))
+        return min(11, 4 + d * 0.85)
+    }
+
+    private var inactiveOpacity: CGFloat {
+        guard !isCurrent else { return 1 }
+        let d = CGFloat(min(rankDistance, 8))
+        return max(0.28, 0.72 - d * 0.055)
     }
 
     var body: some View {
-        let fontSize: CGFloat = isCurrent ? 22 : (14.5 + depthFade * 2.8)
-        let opacity: CGFloat = isCurrent ? 1 : (0.26 + 0.48 * depthFade)
-        let scale: CGFloat = isCurrent ? 1.045 : (0.965 + 0.035 * depthFade)
+        let fontSize: CGFloat = isCurrent ? 23 : 17
+        let weight: Font.Weight = isCurrent ? .semibold : .regular
 
-        HStack(alignment: .firstTextBaseline, spacing: 14) {
-            Capsule()
-                .fill(Color.white.opacity(isCurrent ? 0.95 : (0.12 + 0.14 * depthFade)))
-                .frame(width: isCurrent ? 5 : 2.5, height: isCurrent ? 28 : max(9, 11 * depthFade))
-                .shadow(color: .white.opacity(isCurrent ? (isPlaying ? 0.5 : 0.28) : 0), radius: isCurrent ? 16 : 0, y: 0)
-                .animation(.spring(duration: 0.38, bounce: 0.2), value: isCurrent)
-
-            ZStack(alignment: .leading) {
-                if isCurrent {
-                    Text(attributed)
-                        .font(.system(size: fontSize, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .blur(radius: 16)
-                        .offset(x: 0, y: 1)
-                }
-
-                Text(attributed)
-                    .font(.system(size: fontSize, weight: isCurrent ? .bold : .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(Double(opacity)))
-                    .overlay {
-                        if isCurrent {
-                            TimelineView(.periodic(from: Date(), by: isPlaying ? 0.022 : 0.55)) { ctx in
-                                let t = ctx.date.timeIntervalSinceReferenceDate
-                                let sweep = (sin(t * 2.05) + 1) * 0.5
-                                LinearGradient(
-                                    stops: [
-                                        .init(color: .clear, location: 0),
-                                        .init(color: .white.opacity(0.18 + sweep * 0.14), location: 0.35 + sweep * 0.12),
-                                        .init(color: .clear, location: 1)
-                                    ],
-                                    startPoint: UnitPoint(x: -0.45 + sweep * 0.35, y: 0.5),
-                                    endPoint: UnitPoint(x: 0.55 + sweep * 0.45, y: 0.5)
-                                )
-                                .blendMode(.plusLighter)
-                                .mask(
-                                    Text(attributed)
-                                        .font(.system(size: fontSize, weight: .bold, design: .rounded))
-                                )
-                            }
-                        }
-                    }
-            }
+        Text(displayText)
+            .font(.system(size: fontSize, weight: weight, design: .default))
+            .foregroundStyle(Color.white.opacity(Double(isCurrent ? 1 : inactiveOpacity)))
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-            .scaleEffect(x: scale, y: scale, anchor: .leading)
-        }
-        .animation(.spring(duration: 0.4, bounce: 0.16), value: isCurrent)
-        .animation(.spring(duration: 0.36, bounce: 0.14), value: rankDistance)
+            .blur(radius: inactiveBlur)
+            .animation(.smooth(duration: 0.2), value: isCurrent)
+            .animation(.smooth(duration: 0.2), value: rankDistance)
     }
 }
 
@@ -458,7 +407,6 @@ struct MiniPlayerLyricsPanel: View {
     let albumName: String?
     let durationMs: Int
     let positionMs: Int
-    let isPlaying: Bool
 
     @State private var loadState: LoadState = .idle
 
@@ -466,26 +414,21 @@ struct MiniPlayerLyricsPanel: View {
         case idle
         case loading
         case loaded(LRCLIBFetchedLyrics)
-        case failed(String)
+        case failed
     }
 
     var body: some View {
         Group {
             switch loadState {
             case .idle, .loading:
-                ProgressView("Loading lyrics…")
-                    .tint(.white.opacity(0.9))
-                    .foregroundStyle(.white.opacity(0.8))
+                ProgressView()
+                    .controlSize(.regular)
+                    .tint(.white.opacity(0.35))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loaded(let payload):
                 lyricsBody(for: payload)
-            case .failed(let message):
-                Text(message)
-                    .font(.body)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(28)
+            case .failed:
+                NoLyricsPlaceholder()
             }
         }
         .task(id: "\(trackName)|\(artistName)|\(albumName ?? "")|\(durationMs)") {
@@ -499,22 +442,13 @@ struct MiniPlayerLyricsPanel: View {
         let hasPlain = !payload.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         if payload.instrumental && !hasSynced && !hasPlain {
-            Text("Instrumental")
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.75))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .bottom) {
-                    LRCLIBAttributionChip()
-                }
+            NoLyricsPlaceholder()
         } else if hasSynced, let synced = payload.syncedLines {
-            SyncedLyricsScrollView(lines: synced, positionMs: positionMs, isPlaying: isPlaying)
+            SyncedLyricsScrollView(lines: synced, positionMs: positionMs)
         } else if hasPlain {
             PlainLyricsLineByLineView(lyrics: payload.plainText)
         } else {
-            Text("No lyric lines for this track.")
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.72))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            NoLyricsPlaceholder()
         }
     }
 
@@ -529,8 +463,7 @@ struct MiniPlayerLyricsPanel: View {
             )
             loadState = .loaded(payload)
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            loadState = .failed(message)
+            loadState = .failed
         }
     }
 }

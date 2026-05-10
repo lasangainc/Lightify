@@ -135,8 +135,7 @@ struct MiniPlayerWindowView: View {
                     artistName: np.artistName,
                     albumName: np.albumName,
                     durationMs: np.durationMs,
-                    positionMs: np.positionMs,
-                    isPlaying: np.isPlaying
+                    positionMs: np.positionMs
                 )
             } else {
                 Text("Nothing playing")

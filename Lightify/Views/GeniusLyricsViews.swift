@@ -418,7 +418,7 @@ private struct SyncedLyricLineView: View {
                     .foregroundStyle(Color.white.opacity(Double(opacity)))
                     .overlay {
                         if isCurrent {
-                            TimelineView(.animation(minimumInterval: .milliseconds(isPlaying ? 22 : 500), paused: !isPlaying)) { ctx in
+                            TimelineView(.periodic(from: Date(), by: isPlaying ? 0.022 : 0.55)) { ctx in
                                 let t = ctx.date.timeIntervalSinceReferenceDate
                                 let sweep = (sin(t * 2.05) + 1) * 0.5
                                 LinearGradient(

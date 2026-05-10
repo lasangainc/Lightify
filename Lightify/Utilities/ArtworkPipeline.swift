@@ -48,7 +48,7 @@ actor ArtworkPipeline {
                 throw CocoaError(.coderInvalidValue)
             }
             let cost = max(1, normalizedSize * normalizedSize * 4)
-            await self.storeImage(image, for: key, cost: cost)
+            self.storeImage(image, for: key, cost: cost)
             return image
         }
 
@@ -71,7 +71,7 @@ actor ArtworkPipeline {
             guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
                 throw URLError(.badServerResponse)
             }
-            await self.storeData(data, for: key)
+            self.storeData(data, for: key)
             return data
         }
 

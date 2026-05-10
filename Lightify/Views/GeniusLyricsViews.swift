@@ -8,7 +8,7 @@ import SwiftUI
 // MARK: - Formatting (bracket labels bold, hide round parens)
 
 enum LyricsDisplayFormat {
-    /// Square brackets: Genius section tags (`[Verse 1]`, `[Chorus]`, …) keep visible `[]` with semibold inner; other `[…]` notes stay semibold inner only. Plain segments: strip `(...)`.
+    /// Square brackets: section tags (`[Verse 1]`, `[Chorus]`, …) keep visible `[]` with semibold inner; other `[…]` notes stay semibold inner only. Plain segments: strip `(...)`.
     static func attributedLine(_ line: String) -> AttributedString {
         var result = AttributedString()
         var rest = line[...]
@@ -110,7 +110,7 @@ enum LyricsDisplayFormat {
         return result
     }
 
-    /// Matches Genius-style structural labels so we keep `[` `]` visible (they are not “parsed away”).
+    /// Matches structural labels so we keep `[` `]` visible (they are not “parsed away”).
     private static func isGeniusSectionBracketInner(_ inner: String) -> Bool {
         let t = inner.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
@@ -169,10 +169,22 @@ private struct LyricsLineMetricsKey: PreferenceKey {
     }
 }
 
-// MARK: - Line-by-line (now playing expanded)
+// MARK: - Minimal placeholders
 
-/// One row per lyric line with center-weighted emphasis to mimic the large, focused lyric wall. Scroll is manual; Genius text has no per-line timestamps.
-struct GeniusLyricsLineByLineView: View {
+private struct NoLyricsPlaceholder: View {
+    var body: some View {
+        Text("...")
+            .font(.system(size: 32, weight: .regular, design: .default))
+            .foregroundStyle(.white.opacity(0.45))
+            .tracking(2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Line-by-line (plain)
+
+/// One row per lyric line with center-weighted emphasis. Scroll is manual when timestamps are unavailable.
+struct PlainLyricsLineByLineView: View {
     let lyrics: String
 
     @State private var viewportMidY: CGFloat = 0
@@ -187,79 +199,63 @@ struct GeniusLyricsLineByLineView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack(alignment: .bottom) {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 22) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            lyricLine(line, index: index)
-                        }
-                    }
-                    .padding(.horizontal, 36)
-                    .padding(.vertical, max(proxy.size.height * 0.3, 120))
-                }
-                .coordinateSpace(name: "LyricsScrollSpace")
-                .background {
-                    GeometryReader { scrollProxy in
-                        Color.clear
-                            .preference(
-                                key: LyricsViewportMidYKey.self,
-                                value: scrollProxy.frame(in: .named("LyricsScrollSpace")).midY
-                            )
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 30) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                        lyricLine(line, index: index)
                     }
                 }
-                .mask {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .white.opacity(0.72), location: 0.12),
-                            .init(color: .white, location: 0.34),
-                            .init(color: .white, location: 0.66),
-                            .init(color: .white.opacity(0.72), location: 0.88),
-                            .init(color: .clear, location: 1)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-                .onPreferenceChange(LyricsViewportMidYKey.self) { viewportMidY = $0 }
-                .onPreferenceChange(LyricsLineMetricsKey.self) { metrics = $0 }
-                .background(Color.clear)
-
-                geniusAttributionFootnote
+                .padding(.horizontal, 28)
+                .padding(.vertical, max(proxy.size.height * 0.3, 120))
             }
+            .coordinateSpace(name: "LyricsScrollSpace")
+            .background {
+                GeometryReader { scrollProxy in
+                    Color.clear
+                        .preference(
+                            key: LyricsViewportMidYKey.self,
+                            value: scrollProxy.frame(in: .named("LyricsScrollSpace")).midY
+                        )
+                }
+            }
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .white.opacity(0.85), location: 0.08),
+                        .init(color: .white, location: 0.22),
+                        .init(color: .white, location: 0.78),
+                        .init(color: .white.opacity(0.85), location: 0.92),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .onPreferenceChange(LyricsViewportMidYKey.self) { viewportMidY = $0 }
+            .onPreferenceChange(LyricsLineMetricsKey.self) { metrics = $0 }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.clear)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.clear)
     }
 
-    /// Liquid Glass chip via `glassEffect` / `regular`; non-interactive so the scroll view still receives drags.
-    private var geniusAttributionFootnote: some View {
-        Text("Lyrics provided by Genius")
-            .font(.system(size: 11, weight: .medium, design: .rounded))
-            .foregroundStyle(.primary)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .padding(.horizontal, 20)
-            .padding(.bottom, 10)
-            .allowsHitTesting(false)
-    }
+    private static let emphasisSpring = Animation.spring(duration: 0.46, bounce: 0.4)
 
     private func lyricLine(_ line: String, index: Int) -> some View {
         let emphasis = emphasisForLine(at: index)
+        let fontSize: CGFloat = 22 + (emphasis * 8)
+        let blurRadius: CGFloat = emphasis > 0.72 ? 0 : min(5.5, 0.9 + (1 - emphasis) * 6.5)
+        let opacity: CGFloat = 0.22 + (emphasis * 0.78)
         return Text(LyricsDisplayFormat.attributedLine(line))
-            .font(.system(size: 19 + (emphasis * 9), weight: emphasis > 0.78 ? .bold : .semibold, design: .rounded))
-            .foregroundStyle(.white.opacity(0.18 + (emphasis * 0.82)))
+            .font(.system(size: fontSize, weight: emphasis > 0.75 ? .semibold : .regular, design: .default))
+            .foregroundStyle(.white.opacity(Double(opacity)))
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
+            .blur(radius: blurRadius)
             .scaleEffect(0.97 + (emphasis * 0.05), anchor: .leading)
-            .blur(radius: emphasis < 0.18 ? 0.6 : 0)
-            .animation(.smooth(duration: 0.16), value: emphasis)
+            .animation(Self.emphasisSpring, value: emphasis)
             .background {
                 GeometryReader { lineProxy in
                     Color.clear.preference(
@@ -287,53 +283,195 @@ struct GeniusLyricsLineByLineView: View {
     }
 }
 
+// MARK: - Time-synced (LRCLIB LRC)
+
+struct SyncedLyricsScrollView: View {
+    let lines: [SyncedLyricLine]
+    let positionMs: Int
+
+    private static let scrollSpring = Animation.spring(duration: 0.5, bounce: 0.42)
+
+    private var activeIndex: Int {
+        Self.activeLineIndex(lines: lines, positionMs: positionMs)
+    }
+
+    private static func activeLineIndex(lines: [SyncedLyricLine], positionMs: Int) -> Int {
+        guard !lines.isEmpty else { return 0 }
+        var low = 0
+        var high = lines.count - 1
+        var best = 0
+        while low <= high {
+            let mid = (low + high) / 2
+            if lines[mid].startMs <= positionMs {
+                best = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+        return best
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ScrollViewReader { scrollProxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVStack(alignment: .leading, spacing: 30) {
+                        ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
+                            SyncedLyricLineView(
+                                line: line,
+                                rankDistance: abs(idx - activeIndex),
+                                isCurrent: idx == activeIndex
+                            )
+                            .id(line.id)
+                        }
+                    }
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, max(proxy.size.height * 0.28, 100))
+                }
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(0.88), location: 0.08),
+                            .init(color: .white, location: 0.2),
+                            .init(color: .white, location: 0.8),
+                            .init(color: .white.opacity(0.88), location: 0.92),
+                            .init(color: .clear, location: 1)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+                .onChange(of: activeIndex) { _, newIdx in
+                    guard lines.indices.contains(newIdx) else { return }
+                    withAnimation(Self.scrollSpring) {
+                        scrollProxy.scrollTo(lines[newIdx].id, anchor: UnitPoint(x: 0.5, y: 0.34))
+                    }
+                }
+                .onAppear {
+                    let idx = activeIndex
+                    guard lines.indices.contains(idx) else { return }
+                    DispatchQueue.main.async {
+                        withAnimation(Self.scrollSpring) {
+                            scrollProxy.scrollTo(lines[idx].id, anchor: UnitPoint(x: 0.5, y: 0.34))
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct SyncedLyricLineView: View {
+    let line: SyncedLyricLine
+    let rankDistance: Int
+    let isCurrent: Bool
+
+    private static let lineSpring = Animation.spring(duration: 0.48, bounce: 0.44)
+
+    private var displayText: String {
+        LyricsDisplayFormat.stripRoundParentheticals(line.text)
+    }
+
+    /// Light depth: inactive lines stay readable with only a hint of blur.
+    private var inactiveBlur: CGFloat {
+        guard !isCurrent else { return 0 }
+        let d = CGFloat(min(rankDistance, 10))
+        return min(4.2, 0.65 + d * 0.32)
+    }
+
+    private var inactiveOpacity: CGFloat {
+        guard !isCurrent else { return 1 }
+        let d = CGFloat(min(rankDistance, 8))
+        return max(0.32, 0.78 - d * 0.05)
+    }
+
+    var body: some View {
+        let fontSize: CGFloat = isCurrent ? 30 : 21
+        let weight: Font.Weight = isCurrent ? .semibold : .regular
+
+        Text(displayText)
+            .font(.system(size: fontSize, weight: weight, design: .default))
+            .foregroundStyle(Color.white.opacity(Double(isCurrent ? 1 : inactiveOpacity)))
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .blur(radius: inactiveBlur)
+            .scaleEffect(isCurrent ? 1.035 : 1, anchor: .leading)
+            .animation(Self.lineSpring, value: isCurrent)
+            .animation(Self.lineSpring, value: rankDistance)
+    }
+}
+
 // MARK: - Fetch + load (mini player)
 
 struct MiniPlayerLyricsPanel: View {
     let trackName: String
     let artistName: String
+    let albumName: String?
+    let durationMs: Int
+    let positionMs: Int
 
     @State private var loadState: LoadState = .idle
 
     private enum LoadState: Equatable {
         case idle
         case loading
-        case loaded(String)
-        case failed(String)
+        case loaded(LRCLIBFetchedLyrics)
+        case failed
     }
 
     var body: some View {
         Group {
             switch loadState {
             case .idle, .loading:
-                ProgressView("Loading lyrics…")
-                    .tint(.white.opacity(0.9))
-                    .foregroundStyle(.white.opacity(0.8))
+                ProgressView()
+                    .controlSize(.regular)
+                    .tint(.white.opacity(0.35))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .loaded(let text):
-                GeniusLyricsLineByLineView(lyrics: text)
-            case .failed(let message):
-                Text(message)
-                    .font(.body)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(28)
+            case .loaded(let payload):
+                lyricsBody(for: payload)
+            case .failed:
+                NoLyricsPlaceholder()
             }
         }
-        .task(id: "\(trackName)|\(artistName)") {
+        .task(id: "\(trackName)|\(artistName)|\(albumName ?? "")|\(durationMs)") {
             await fetchLyrics()
+        }
+    }
+
+    @ViewBuilder
+    private func lyricsBody(for payload: LRCLIBFetchedLyrics) -> some View {
+        let hasSynced = (payload.syncedLines?.isEmpty == false)
+        let hasPlain = !payload.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        if payload.instrumental && !hasSynced && !hasPlain {
+            NoLyricsPlaceholder()
+        } else if hasSynced, let synced = payload.syncedLines {
+            SyncedLyricsScrollView(lines: synced, positionMs: positionMs)
+        } else if hasPlain {
+            PlainLyricsLineByLineView(lyrics: payload.plainText)
+        } else {
+            NoLyricsPlaceholder()
         }
     }
 
     private func fetchLyrics() async {
         loadState = .loading
         do {
-            let text = try await GeniusLyricsService().fetchLyrics(title: trackName, artist: artistName)
-            loadState = .loaded(text)
+            let payload = try await LRCLIBLyricsService().fetchLyrics(
+                trackName: trackName,
+                artistName: artistName,
+                albumName: albumName,
+                durationMs: durationMs
+            )
+            loadState = .loaded(payload)
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            loadState = .failed(message)
+            loadState = .failed
         }
     }
 }

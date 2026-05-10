@@ -106,7 +106,7 @@ struct MiniPlayerWindowView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Wide layout: controls + artwork on the left, fetched lyrics (line-by-line) on the right.
+    /// Wide layout: controls + artwork on the left, LRCLIB lyrics (synced when available) on the right.
     private var expandedPlayerWithLyricsLayout: some View {
         HStack(alignment: .center, spacing: 44) {
             VStack(spacing: 14) {
@@ -132,7 +132,10 @@ struct MiniPlayerWindowView: View {
             if let np = playback.nowPlaying {
                 MiniPlayerLyricsPanel(
                     trackName: np.trackName,
-                    artistName: np.artistName
+                    artistName: np.artistName,
+                    albumName: np.albumName,
+                    durationMs: np.durationMs,
+                    positionMs: np.positionMs
                 )
             } else {
                 Text("Nothing playing")
@@ -453,7 +456,7 @@ struct MiniPlayerWindowView: View {
     }
 }
 
-// MARK: - Control chrome (pop-out player only; Genius attribution in lyrics keeps system glass)
+// MARK: - Control chrome (pop-out player only; LRCLIB attribution chip in lyrics keeps system glass)
 
 /// Control chrome: light-on-dark for almost all artwork; dark-on-light only when the sampled average is
 /// near-white (very high luminance), plus when there is no sample (window background reads light).

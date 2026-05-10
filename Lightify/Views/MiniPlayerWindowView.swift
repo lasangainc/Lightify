@@ -31,7 +31,7 @@ struct MiniPlayerWindowView: View {
     @State private var shuffleBounceTick = 0
     @State private var repeatBounceTick = 0
     @State private var lyricsBounceTick = 0
-    @State private var sampledTint: (color: Color, gradientEnd: Color, luminance: CGFloat)?
+    @State private var playerBackdrop: PlayerBackdropPalette?
 
     private static let symbolReplace = Animation.smooth(duration: 0.23)
     private static let artworkScaleAnimation = Animation.smooth(duration: 0.26)
@@ -39,20 +39,14 @@ struct MiniPlayerWindowView: View {
     /// Filled / stroked control capsules: solid surfaces, no material glass. Biased so only
     /// clearly high-luminance artwork flips to dark chrome—avoids the bad light-on-light case in the mid band.
     private var miniControlChrome: MiniPlayerControlChrome {
-        MiniPlayerControlChrome.from(luminance: sampledTint?.luminance)
+        MiniPlayerControlChrome.from(luminance: playerBackdrop?.luminance)
     }
 
     private var controlTint: Color {
         miniControlChrome.sliderTint
     }
 
-    /// Perceived light wash in `artworkWindowBackground` (kept independent of the control flip band).
-    private var radialWhiteOpacity: Double {
-        guard let l = sampledTint?.luminance else { return 0.18 }
-        return l < 0.5 ? 0.08 : 0.18
-    }
-
-    private var lyricsForeground: Color {
+    /// Full size while playing or when idle; slightly smaller when a track is loaded but paused.
         .white
     }
 
@@ -169,39 +163,9 @@ struct MiniPlayerWindowView: View {
     }
 
     private var artworkWindowBackground: some View {
-        ZStack {
-            if let tint = sampledTint {
-                LinearGradient(
-                    colors: [
-                        tint.gradientEnd.opacity(0.96),
-                        tint.color.opacity(0.94),
-                        tint.gradientEnd.opacity(0.98)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .overlay {
-                    RadialGradient(
-                        colors: [
-                            .white.opacity(radialWhiteOpacity),
-                            .clear
-                        ],
-                        center: .center,
-                        startRadius: 30,
-                        endRadius: 420
-                    )
-                }
-                .overlay(alignment: .trailing) {
-                    LinearGradient(
-                        colors: [
-                            .clear,
-                            .black.opacity(0.1),
-                            .black.opacity(0.22)
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                }
+        Group {
+            if let palette = playerBackdrop {
+                MiniPlayerLiquidBackdrop(palette: palette)
             } else {
                 Color(nsColor: .underPageBackgroundColor)
             }
@@ -210,13 +174,13 @@ struct MiniPlayerWindowView: View {
 
     @MainActor
     private func refreshArtworkTint() async {
-        sampledTint = nil
+        playerBackdrop = nil
         guard let url = playback.nowPlaying?.artworkURL else { return }
         do {
             let image = try await ArtworkPipeline.shared.image(for: url, maxPixelSize: 96)
-            sampledTint = ArtworkColorSampler.tint(from: image)
+            playerBackdrop = ArtworkColorSampler.playerBackdropPalette(from: image)
         } catch {
-            sampledTint = nil
+            playerBackdrop = nil
         }
     }
 

@@ -25,6 +25,14 @@ struct ArtworkPalette {
     let vibrant: Vibrant?
 }
 
+/// Several prominent colors from the cover (k-means on a downsampled bitmap). Used only for
+/// the mini player liquid backdrop. Library playlist and album hero gradients still use
+/// `ArtworkPalette` from `palette(from:)` and are intentionally unchanged.
+struct PlayerBackdropPalette {
+    let swatches: [Color]
+    let luminance: CGFloat
+}
+
 enum ArtworkColorSampler {
     /// Average RGB sampled from a downscaled bitmap, plus a darker **fully opaque** variant for gradients (no alpha fade).
     nonisolated static func tint(from imageData: Data) -> (color: Color, gradientEnd: Color, luminance: CGFloat)? {
@@ -44,28 +52,7 @@ enum ArtworkColorSampler {
 
     nonisolated static func palette(from img: NSImage) -> ArtworkPalette? {
         let size = CGSize(width: 64, height: 64)
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: Int(size.width),
-            pixelsHigh: Int(size.height),
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 32
-        ) else { return nil }
-
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        img.draw(
-            in: NSRect(origin: .zero, size: size),
-            from: NSRect(origin: .zero, size: img.size),
-            operation: .copy,
-            fraction: 1.0
-        )
-        NSGraphicsContext.restoreGraphicsState()
+        guard let rep = rgbBitmap(from: img, size: size) else { return nil }
 
         var r: CGFloat = 0
         var g: CGFloat = 0
@@ -177,5 +164,223 @@ enum ArtworkColorSampler {
             luminance: luma,
             vibrant: vibrant
         )
+    }
+
+    /// K-means palette for mini player liquid backgrounds only.
+    nonisolated static func playerBackdropPalette(from imageData: Data) -> PlayerBackdropPalette? {
+        guard let img = NSImage(data: imageData) else { return nil }
+        return playerBackdropPalette(from: img)
+    }
+
+    nonisolated static func playerBackdropPalette(from img: NSImage) -> PlayerBackdropPalette? {
+        let size = CGSize(width: 56, height: 56)
+        guard let rep = rgbBitmap(from: img, size: size) else { return nil }
+        return playerBackdropPalette(from: rep)
+    }
+
+    // MARK: - Private
+
+    nonisolated private static func rgbBitmap(from img: NSImage, size: CGSize) -> NSBitmapImageRep? {
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(size.width),
+            pixelsHigh: Int(size.height),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 32
+        ) else { return nil }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        img.draw(
+            in: NSRect(origin: .zero, size: size),
+            from: NSRect(origin: .zero, size: img.size),
+            operation: .copy,
+            fraction: 1.0
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        return rep
+    }
+
+    nonisolated private static func playerBackdropPalette(from rep: NSBitmapImageRep) -> PlayerBackdropPalette? {
+        let w = rep.pixelsWide
+        let h = rep.pixelsHigh
+        let step = 2
+        var meanR: CGFloat = 0
+        var meanG: CGFloat = 0
+        var meanB: CGFloat = 0
+        var meanCount = 0
+        var clusterPoints: [RGBPoint] = []
+        clusterPoints.reserveCapacity((w / step) * (h / step))
+
+        for y in stride(from: 0, to: h, by: step) {
+            for x in stride(from: 0, to: w, by: step) {
+                guard let raw = rep.colorAt(x: x, y: y),
+                      let c = raw.usingColorSpace(.deviceRGB) else { continue }
+                var rr: CGFloat = 0
+                var gg: CGFloat = 0
+                var bb: CGFloat = 0
+                var aa: CGFloat = 0
+                c.getRed(&rr, green: &gg, blue: &bb, alpha: &aa)
+                if aa < 0.08 { continue }
+                meanR += rr
+                meanG += gg
+                meanB += bb
+                meanCount += 1
+                clusterPoints.append(RGBPoint(r: rr, g: gg, b: bb))
+            }
+        }
+
+        guard meanCount > 0 else { return nil }
+        meanR /= CGFloat(meanCount)
+        meanG /= CGFloat(meanCount)
+        meanB /= CGFloat(meanCount)
+        let luma = 0.299 * meanR + 0.587 * meanG + 0.114 * meanB
+
+        let meanPoint = RGBPoint(r: meanR, g: meanG, b: meanB)
+        guard !clusterPoints.isEmpty else {
+            return PlayerBackdropPalette(
+                swatches: paddedSwatches(from: [meanPoint], mean: meanPoint),
+                luminance: luma
+            )
+        }
+
+        let k = min(5, max(3, clusterPoints.count / 18 + 1))
+        var weighted = kMeansCentroids(points: clusterPoints, k: k)
+        weighted = mergeSimilarCentroids(weighted, minDistanceSquared: 0.014)
+
+        var swatches = weighted.map { Color(red: $0.centroid.r, green: $0.centroid.g, blue: $0.centroid.b) }
+        if swatches.count < 3 {
+            swatches = paddedSwatches(from: weighted.map(\.centroid), mean: meanPoint)
+        } else if swatches.count > 5 {
+            swatches = Array(swatches.prefix(5))
+        }
+
+        return PlayerBackdropPalette(swatches: swatches, luminance: luma)
+    }
+
+    nonisolated private static func paddedSwatches(from centroids: [RGBPoint], mean: RGBPoint) -> [Color] {
+        var colors = centroids.map { Color(red: $0.r, green: $0.g, blue: $0.b) }
+        let darkScale: CGFloat = 0.52
+        let dark = Color(
+            red: min(max(mean.r * darkScale, 0), 1),
+            green: min(max(mean.g * darkScale, 0), 1),
+            blue: min(max(mean.b * darkScale, 0), 1)
+        )
+        let lift = Color(
+            red: min(max(mean.r * 1.08 + 0.04, 0), 1),
+            green: min(max(mean.g * 1.08 + 0.04, 0), 1),
+            blue: min(max(mean.b * 1.08 + 0.04, 0), 1)
+        )
+        while colors.count < 3 {
+            if colors.isEmpty {
+                colors.append(Color(red: mean.r, green: mean.g, blue: mean.b))
+            } else if colors.count == 1 {
+                colors.append(dark)
+            } else {
+                colors.append(lift)
+            }
+        }
+        return colors
+    }
+
+    nonisolated private static func kMeansCentroids(points: [RGBPoint], k: Int) -> [(centroid: RGBPoint, weight: Int)] {
+        let kClamped = min(k, points.count)
+        guard kClamped > 0 else { return [] }
+
+        var centroids: [RGBPoint] = []
+        centroids.reserveCapacity(kClamped)
+        for j in 0..<kClamped {
+            let idx = min(points.count - 1, (j * points.count) / max(kClamped, 1))
+            centroids.append(points[idx])
+        }
+
+        var assignments = [Int](repeating: 0, count: points.count)
+
+        for _ in 0..<14 {
+            for (i, p) in points.enumerated() {
+                var bestJ = 0
+                var bestD = CGFloat.greatestFiniteMagnitude
+                for (j, c) in centroids.enumerated() {
+                    let d = p.distanceSquared(to: c)
+                    if d < bestD {
+                        bestD = d
+                        bestJ = j
+                    }
+                }
+                assignments[i] = bestJ
+            }
+
+            var sums = [RGBPoint](repeating: .zero, count: kClamped)
+            var counts = [Int](repeating: 0, count: kClamped)
+            for (i, p) in points.enumerated() {
+                let j = assignments[i]
+                sums[j].r += p.r
+                sums[j].g += p.g
+                sums[j].b += p.b
+                counts[j] += 1
+            }
+
+            for j in 0..<kClamped {
+                if counts[j] == 0 {
+                    let rescueIdx = (j * 17 + points.count / 2) % points.count
+                    centroids[j] = points[rescueIdx]
+                } else {
+                    let n = CGFloat(counts[j])
+                    centroids[j] = RGBPoint(r: sums[j].r / n, g: sums[j].g / n, b: sums[j].b / n)
+                }
+            }
+        }
+
+        var counts = [Int](repeating: 0, count: kClamped)
+        for i in points.indices {
+            counts[assignments[i]] += 1
+        }
+
+        return zip(centroids, counts)
+            .sorted { $0.1 > $1.1 }
+            .map { (centroid: $0.0, weight: $0.1) }
+    }
+
+    nonisolated private static func mergeSimilarCentroids(
+        _ weighted: [(centroid: RGBPoint, weight: Int)],
+        minDistanceSquared: CGFloat
+    ) -> [(centroid: RGBPoint, weight: Int)] {
+        var out: [(RGBPoint, Int)] = []
+        for pair in weighted {
+            if let idx = out.firstIndex(where: { outPair in
+                outPair.0.distanceSquared(to: pair.centroid) < minDistanceSquared
+            }) {
+                let wSum = out[idx].1 + pair.weight
+                let wr = (out[idx].0.r * CGFloat(out[idx].1) + pair.centroid.r * CGFloat(pair.weight)) / CGFloat(wSum)
+                let wg = (out[idx].0.g * CGFloat(out[idx].1) + pair.centroid.g * CGFloat(pair.weight)) / CGFloat(wSum)
+                let wb = (out[idx].0.b * CGFloat(out[idx].1) + pair.centroid.b * CGFloat(pair.weight)) / CGFloat(wSum)
+                out[idx] = (RGBPoint(r: wr, g: wg, b: wb), wSum)
+            } else {
+                out.append((pair.centroid, pair.weight))
+            }
+        }
+        return out.map { (centroid: $0.0, weight: $0.1) }
+    }
+}
+
+// MARK: - RGB helpers (fileprivate for sampler)
+
+private struct RGBPoint: Sendable {
+    var r: CGFloat
+    var g: CGFloat
+    var b: CGFloat
+
+    static let zero = RGBPoint(r: 0, g: 0, b: 0)
+
+    func distanceSquared(to o: RGBPoint) -> CGFloat {
+        let dr = r - o.r
+        let dg = g - o.g
+        let db = b - o.b
+        return dr * dr + dg * dg + db * db
     }
 }

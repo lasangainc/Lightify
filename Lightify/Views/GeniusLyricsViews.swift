@@ -200,7 +200,7 @@ struct PlainLyricsLineByLineView: View {
     var body: some View {
         GeometryReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 30) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                         lyricLine(line, index: index)
                     }
@@ -239,10 +239,12 @@ struct PlainLyricsLineByLineView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private static let emphasisSpring = Animation.spring(duration: 0.46, bounce: 0.4)
+
     private func lyricLine(_ line: String, index: Int) -> some View {
         let emphasis = emphasisForLine(at: index)
-        let fontSize: CGFloat = 17 + (emphasis * 5)
-        let blurRadius: CGFloat = emphasis > 0.72 ? 0 : min(14, 3.5 + (1 - emphasis) * 16)
+        let fontSize: CGFloat = 22 + (emphasis * 8)
+        let blurRadius: CGFloat = emphasis > 0.72 ? 0 : min(5.5, 0.9 + (1 - emphasis) * 6.5)
         let opacity: CGFloat = 0.22 + (emphasis * 0.78)
         return Text(LyricsDisplayFormat.attributedLine(line))
             .font(.system(size: fontSize, weight: emphasis > 0.75 ? .semibold : .regular, design: .default))
@@ -252,7 +254,8 @@ struct PlainLyricsLineByLineView: View {
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .blur(radius: blurRadius)
-            .animation(.smooth(duration: 0.18), value: emphasis)
+            .scaleEffect(0.97 + (emphasis * 0.05), anchor: .leading)
+            .animation(Self.emphasisSpring, value: emphasis)
             .background {
                 GeometryReader { lineProxy in
                     Color.clear.preference(
@@ -286,7 +289,7 @@ struct SyncedLyricsScrollView: View {
     let lines: [SyncedLyricLine]
     let positionMs: Int
 
-    private static let scrollSpring = Animation.spring(duration: 0.52, bounce: 0.22)
+    private static let scrollSpring = Animation.spring(duration: 0.5, bounce: 0.42)
 
     private var activeIndex: Int {
         Self.activeLineIndex(lines: lines, positionMs: positionMs)
@@ -313,7 +316,7 @@ struct SyncedLyricsScrollView: View {
         GeometryReader { proxy in
             ScrollViewReader { scrollProxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(alignment: .leading, spacing: 26) {
+                    LazyVStack(alignment: .leading, spacing: 30) {
                         ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
                             SyncedLyricLineView(
                                 line: line,
@@ -350,7 +353,9 @@ struct SyncedLyricsScrollView: View {
                     let idx = activeIndex
                     guard lines.indices.contains(idx) else { return }
                     DispatchQueue.main.async {
-                        scrollProxy.scrollTo(lines[idx].id, anchor: UnitPoint(x: 0.5, y: 0.34))
+                        withAnimation(Self.scrollSpring) {
+                            scrollProxy.scrollTo(lines[idx].id, anchor: UnitPoint(x: 0.5, y: 0.34))
+                        }
                     }
                 }
             }
@@ -365,25 +370,27 @@ private struct SyncedLyricLineView: View {
     let rankDistance: Int
     let isCurrent: Bool
 
+    private static let lineSpring = Animation.spring(duration: 0.48, bounce: 0.44)
+
     private var displayText: String {
         LyricsDisplayFormat.stripRoundParentheticals(line.text)
     }
 
-    /// Softer lines further from the active lyric (reference-style depth).
+    /// Light depth: inactive lines stay readable with only a hint of blur.
     private var inactiveBlur: CGFloat {
         guard !isCurrent else { return 0 }
         let d = CGFloat(min(rankDistance, 10))
-        return min(11, 4 + d * 0.85)
+        return min(4.2, 0.65 + d * 0.32)
     }
 
     private var inactiveOpacity: CGFloat {
         guard !isCurrent else { return 1 }
         let d = CGFloat(min(rankDistance, 8))
-        return max(0.28, 0.72 - d * 0.055)
+        return max(0.32, 0.78 - d * 0.05)
     }
 
     var body: some View {
-        let fontSize: CGFloat = isCurrent ? 23 : 17
+        let fontSize: CGFloat = isCurrent ? 30 : 21
         let weight: Font.Weight = isCurrent ? .semibold : .regular
 
         Text(displayText)
@@ -394,8 +401,9 @@ private struct SyncedLyricLineView: View {
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .blur(radius: inactiveBlur)
-            .animation(.smooth(duration: 0.2), value: isCurrent)
-            .animation(.smooth(duration: 0.2), value: rankDistance)
+            .scaleEffect(isCurrent ? 1.035 : 1, anchor: .leading)
+            .animation(Self.lineSpring, value: isCurrent)
+            .animation(Self.lineSpring, value: rankDistance)
     }
 }
 
